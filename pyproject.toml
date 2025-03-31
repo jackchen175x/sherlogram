@@ -8,7 +8,7 @@ version = "1.5.0"
 description = "Telegram integration for Claude via the Model Context Protocol"
 readme = "README.md"
 authors = [
-    {name = "l1v0n1", email = "your.email@example.com"}
+    {name = "l1v0n1"}
 ]
 license = {text = "Apache-2.0"}
 classifiers = [
@@ -33,19 +33,3 @@ dependencies = [
 [project.urls]
 "Homepage" = "https://github.com/l1v0n1/telegram-mcp-server"
 "Bug Tracker" = "https://github.com/l1v0n1/telegram-mcp-server/issues"
-
-[tool.black]
-line-length = 100
-target-version = ["py310", "py311", "py312"]
-
-[tool.ruff]
-target-version = "py310"
-line-length = 100
-select = ["E", "F", "B"]
-ignore = []
-
-[tool.pytest.ini_options]
-minversion = "6.0"
-addopts = "--verbose"
-testpaths = ["tests"]
-python_files = "test_*.py"
