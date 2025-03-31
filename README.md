@@ -1,89 +1,99 @@
-![](https://badge.mcpx.dev 'MCP')
+# Telegram MCP for Claude
+
+![MCP Badge](https://badge.mcpx.dev)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-green?style=flat-square)](https://opensource.org/licenses/Apache-2.0)
-[![LinkedIn](https://img.shields.io/badge/LinkedIn-blue)](https://www.linkedin.com/in/eugene-evstafev-716669181/)
 
-# Telegram MCP Server
+A powerful Telegram integration for Claude via the Model Context Protocol (MCP), allowing you to interact with your Telegram account directly from Claude Desktop.
 
-A Telegram MCP (Model Context Protocol) server built using Python, Telethon, and MCP Python SDK. This MCP server provides simple tools for interacting with Telegram chats directly through MCP-compatible hosts, such as Claude for Desktop.
+![Telegram MCP in action](screenshots/1.png)
 
-## Tools Provided
+## 🚀 Features
 
-- **`get_chats`**: Retrieve a paginated list of your Telegram chats.
-- **`get_messages`**: Retrieve paginated messages from a specific chat.
-- **`send_message`**: Send a message to a specific chat.
+This MCP server provides a comprehensive suite of tools for seamless Telegram interaction:
 
-## Requirements
+### Chat Management
+- **get_chats** - Get a paginated list of your chats
+- **list_chats** - List all chats with detailed metadata and filtering options
+- **get_chat** - Get detailed information about a specific chat
 
-- Python 3.10 or higher
-- [Telethon](https://docs.telethon.dev/) package
+### Messaging
+- **get_messages** - Get messages from a specific chat with pagination
+- **list_messages** - Retrieve messages with powerful filtering (text search, date ranges)
+- **send_message** - Send messages to any chat
+- **get_message_context** - View the context around a specific message
+
+### Contact Management
+- **search_contacts** - Find contacts by name, username or phone number
+- **get_direct_chat_by_contact** - Find personal chats with specific contacts
+- **get_contact_chats** - List all chats (including groups) involving a contact
+- **get_last_interaction** - View your most recent exchanges with a contact
+
+## 📋 Requirements
+
+- Python 3.10+
+- [Telethon](https://docs.telethon.dev/) for Telegram API access
 - [MCP Python SDK](https://modelcontextprotocol.io/docs/)
-- [UV](https://astral.sh/uv/) (optional but recommended)
+- [UV](https://astral.sh/uv/) package manager
+- [Claude Desktop](https://claude.ai/desktop) app
 
-## Installation and Setup
+## 🔧 Installation
 
-### Clone the Repository
+### 1. Clone the Repository
 
 ```bash
 git clone https://github.com/chigwell/telegram-mcp
 cd telegram-mcp
 ```
 
-### Create Environment File
+### 2. Generate Session String
 
-Copy and rename `.env.example` to `.env` and fill it with your Telegram credentials obtained from [https://my.telegram.org/apps](https://my.telegram.org/apps):
+For better security and portability, this project uses Telethon's StringSession. Generate your session string:
 
 ```bash
-cp .env.example .env
+python session_string_generator.py
 ```
 
-Your `.env` file should look like:
+This will:
+1. Ask for your phone number
+2. Send a verification code to your Telegram app
+3. Generate a session string and add it to your `.env` file
 
-```env
+The session string allows authentication without storing SQLite session files, which helps avoid database lock issues and improves portability.
+
+### 3. Set Up Your Environment
+
+Create a `.env` file with your Telegram credentials:
+
+```
 TELEGRAM_API_ID=your_api_id_here
 TELEGRAM_API_HASH=your_api_hash_here
-TELEGRAM_SESSION_NAME=your_session_name
+TELEGRAM_SESSION_NAME=anon
+TELEGRAM_SESSION_STRING=your_session_string_here
 ```
 
-### Setup Python Environment
+You can obtain API credentials at [my.telegram.org/apps](https://my.telegram.org/apps).
 
-Use `uv` to set up the Python environment and install dependencies:
+### 4. Install Dependencies
 
 ```bash
 uv venv
-source .venv/bin/activate
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 uv add "mcp[cli]" telethon python-dotenv nest_asyncio
 ```
 
-### Run the Server (First-time Auth)
+### 5. Configure Claude Desktop
 
-The first time you run the server, Telethon will prompt you to enter a Telegram authentication code:
-
-```bash
-uv run main.py
-```
-
-Authenticate by entering the code sent to your Telegram client. This step is only required once.
-
-## Integrating with Claude for Desktop
-
-### macOS/Linux
-
-Edit your Claude Desktop configuration:
-
-```bash
-nano ~/Library/Application\ Support/Claude/claude_desktop_config.json
-```
-
-Add this MCP server configuration:
+#### On macOS/Linux:
+Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ```json
 {
     "mcpServers": {
         "telegram-mcp": {
-            "command": "uv",
+            "command": "/full/path/to/uv",
             "args": [
                 "--directory",
-                "/ABSOLUTE_PATH/telegram-mcp",
+                "/full/path/to/telegram-mcp-server",
                 "run",
                 "main.py"
             ]
@@ -92,40 +102,57 @@ Add this MCP server configuration:
 }
 ```
 
-Ensure you replace `/ABSOLUTE_PATH/telegram-mcp` with your project's absolute path.
+#### On Windows:
+Edit `%APPDATA%\Claude\claude_desktop_config.json` with similar configuration.
 
-### Windows
+## 🎮 Usage Examples
 
-Edit your Claude Desktop configuration:
+Here are some ways to interact with Telegram through Claude:
 
-```powershell
-nano $env:AppData\Claude\claude_desktop_config.json
-```
+### Basic Chat Navigation
+- "Show me my most recent chats"
+- "List my group chats with unread messages"
+- "Show detailed information about chat 123456789"
 
-Add this MCP server configuration:
+### Messaging
+- "Show me the last 10 messages from chat 123456789"
+- "Send 'I'll be there in 10 minutes' to chat 123456789"
+- "Find messages containing 'meeting' in chat 123456789"
+- "Show messages from March 1-15, 2023 in chat 123456789"
 
-```json
-{
-    "mcpServers": {
-        "telegram-mcp": {
-            "command": "uv",
-            "args": [
-                "--directory",
-                "C:\\ABSOLUTE_PATH\\telegram-mcp",
-                "run",
-                "main.py"
-            ]
-        }
-    }
-}
-```
+### Contact Interactions
+- "Search for contacts named 'Alex'"
+- "Find my direct chat with John"
+- "Show all chats where I interact with contact 987654321"
+- "Show my last conversation with Lisa"
 
-Ensure you replace `C:\ABSOLUTE_PATH\telegram-mcp` with your project's absolute path.
+### Advanced Features
+- "Show the context around message 42 in chat 123456789"
+- "List all channels I'm subscribed to"
 
-## Usage
+## 🔒 Security Considerations
 
-Once integrated, your Telegram tools (`get_chats`, `get_messages`, and `send_message`) will become available within the Claude for Desktop UI or any other MCP-compatible client.
+- **Private API Keys**: Never commit your `.env` file or session files to Git repositories
+- **Session String**: The session string in your `.env` file provides full access to your Telegram account. Keep it secure.
+- **Local Processing**: All Telegram data is processed locally on your machine - no data is sent to external servers beyond Telegram's own API.
+- **Permissions**: The MCP server has the same access to Telegram as you would have with the official app, including reading and sending messages.
 
-## License
+## 🛠️ Troubleshooting
 
-This project is licensed under the [Apache 2.0 License](https://opensource.org/licenses/Apache-2.0).
+If you encounter issues:
+
+1. Check Claude Desktop logs for error messages
+2. Ensure your Telegram API credentials are correct
+3. Verify that the paths in your Claude Desktop config are absolute and correct
+4. If you see database lock errors, use the session string authentication method
+5. If you need to regenerate your session string, run `python session_string_generator.py` again
+
+## 📄 License
+
+This project is licensed under the [Apache 2.0 License](LICENSE).
+
+## 🙏 Acknowledgements
+
+- [Telethon](https://github.com/LonamiWebs/Telethon) for the Telegram client library
+- [Model Context Protocol](https://modelcontextprotocol.io/) for the integration framework
+- [Anthropic](https://www.anthropic.com/) for Claude and the Claude Desktop app

@@ -1,13 +1,35 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "telegram-mcp"
-version = "2025.3.201549"
-description = "A Telegram MCP (Model Context Protocol) server built using Python, Telethon, and MCP Python SDK. This MCP server provides simple tools for interacting with Telegram chats directly through MCP-compatible hosts, such as Claude for Desktop."
+version = "1.5.0"
+description = "Telegram MCP (Model Context Protocol) server built using Python, Telethon, and MCP Python SDK"
 readme = "README.md"
-requires-python = ">=3.13"
+authors = [
+    {name = "chigwell"}
+]
+license = {text = "Apache-2.0"}
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+requires-python = ">=3.10"
 dependencies = [
     "dotenv>=0.9.9",
     "httpx>=0.28.1",
     "mcp[cli]>=1.4.1",
     "nest-asyncio>=1.6.0",
+    "python-dotenv>=1.1.0",
     "telethon>=1.39.0",
 ]
+
+[project.urls]
+"Homepage" = "https://github.com/chigwell/telegram-mcp"
+"Bug Tracker" = "https://github.com/chigwell/telegram-mcp/issues"
