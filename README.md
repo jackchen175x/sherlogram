@@ -45,27 +45,7 @@ git clone https://github.com/l1v0n1/telegram-mcp-server
 cd telegram-mcp-server
 ```
 
-### 2. Set Up Your Environment
-
-Create a `.env` file with your Telegram credentials:
-
-```
-TELEGRAM_API_ID=your_api_id_here
-TELEGRAM_API_HASH=your_api_hash_here
-TELEGRAM_SESSION_NAME=anon
-```
-
-You can obtain API credentials at [my.telegram.org/apps](https://my.telegram.org/apps).
-
-### 3. Install Dependencies
-
-```bash
-uv venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-uv add "mcp[cli]" telethon python-dotenv nest_asyncio
-```
-
-### 4. Generate Session String
+### 2. Generate Session String
 
 For better security and portability, this project uses Telethon's StringSession. Generate your session string:
 
@@ -79,6 +59,27 @@ This will:
 3. Generate a session string and add it to your `.env` file
 
 The session string allows authentication without storing SQLite session files, which helps avoid database lock issues and improves portability.
+
+### 3. Set Up Your Environment
+
+Create a `.env` file with your Telegram credentials:
+
+```
+TELEGRAM_API_ID=your_api_id_here
+TELEGRAM_API_HASH=your_api_hash_here
+TELEGRAM_SESSION_NAME=anon
+TELEGRAM_SESSION_STRING=your_session_string_here
+```
+
+You can obtain API credentials at [my.telegram.org/apps](https://my.telegram.org/apps).
+
+### 4. Install Dependencies
+
+```bash
+uv venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+uv add "mcp[cli]" telethon python-dotenv nest_asyncio
+```
 
 ### 5. Configure Claude Desktop
 
