@@ -172,3 +172,16 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Telegram session files
+*.session
+*.session-journal
+anon.session
+anon.session-journal
+anon_new.session
+anon_new.session-journal
+*.session.sql
+*.session.sql-journal
+
+# Claude Desktop config
+claude_desktop_config.json
