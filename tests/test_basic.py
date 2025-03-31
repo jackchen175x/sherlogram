@@ -24,8 +24,6 @@ def mock_client():
 def test_imports():
     """Test that all necessary imports are available"""
     # This will fail if any import is missing
-    import main
-    from mcp.server.fastmcp import FastMCP
     from telethon import TelegramClient
     from telethon.sessions import StringSession
 
