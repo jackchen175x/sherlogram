@@ -187,3 +187,4 @@ anon_new.session-journal
 
 # Claude Desktop config
 claude_desktop_config.json
+.DS_Store
