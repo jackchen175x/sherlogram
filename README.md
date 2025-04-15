@@ -3,6 +3,8 @@
 ![MCP Badge](https://badge.mcpx.dev)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-green?style=flat-square)](https://opensource.org/licenses/Apache-2.0)
 
+![Telegram MCP in action](screenshots/1.png)
+
 A full-featured Telegram integration for Claude, Cursor, and any MCP-compatible client, powered by [Telethon](https://docs.telethon.dev/) and the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/). This project lets you interact with your Telegram account programmatically, automating everything from messaging to group management.
 
 **Maintained by [l1v0n1](https://github.com/l1v0n1). Forked from [chigwell/telegram-mcp](https://github.com/chigwell/telegram-mcp).**
