@@ -8,6 +8,7 @@ version = "1.5.0"
 description = "Telegram integration for Claude via the Model Context Protocol"
 readme = "README.md"
 authors = [
+    {name = "chigwell"},
     {name = "l1v0n1"}
 ]
 license = {text = "Apache-2.0"}
@@ -18,7 +19,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.12"
 ]
 requires-python = ">=3.10"
 dependencies = [
@@ -27,9 +28,9 @@ dependencies = [
     "mcp[cli]>=1.4.1",
     "nest-asyncio>=1.6.0",
     "python-dotenv>=1.1.0",
-    "telethon>=1.39.0",
+    "telethon>=1.39.0"
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/l1v0n1/telegram-mcp-server"
-"Bug Tracker" = "https://github.com/l1v0n1/telegram-mcp-server/issues"
+"Homepage" = "https://github.com/chigwell/telegram-mcp"
+"Bug Tracker" = "https://github.com/chigwell/telegram-mcp/issues"
