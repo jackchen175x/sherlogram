@@ -517,7 +517,7 @@ The code is designed to be robust against common Telegram API issues and limitat
    ```
 4. **Make your changes, add tests/docs if needed.**
 5. **Push and open a Pull Request** to [chigwell/telegram-mcp](https://github.com/chigwell/telegram-mcp) with a clear description.
-6. **Tag @l1v0n1** in your PR for review.
+6. **Tag @chigwell or @l1v0n1** in your PR for review.
 
 ---
 
