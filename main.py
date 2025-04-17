@@ -19,7 +19,6 @@ import mimetypes
 import logging
 import telethon.errors.rpcerrorlist
 
-# Helper function for JSON serialization of datetime, bytes, and other non-serializable objects
 def json_serializer(obj):
     """Helper function to convert non-serializable objects for JSON serialization."""
     if isinstance(obj, datetime):
