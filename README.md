@@ -9,8 +9,9 @@
 
 Here's a demonstration of the Telegram MCP capabilities in Claude:
 
-![Telegram MCP in action](screenshots/1.png)
+ **Basic usage example:**
 
+![Telegram MCP in action](screenshots/1.png)
 
 1. **Example: Asking Claude to analyze chat history and send a response:**
 
