@@ -14,7 +14,6 @@ from telethon.tl.functions.contacts import SearchRequest
 from datetime import datetime, timedelta
 import json
 from typing import List, Dict, Optional, Union, Any
-from telethon import functions
 import mimetypes
 import logging
 import telethon.errors.rpcerrorlist
