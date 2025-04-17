@@ -9,7 +9,6 @@ from telethon import TelegramClient
 from telethon.sessions import StringSession
 import sqlite3
 from telethon.tl.types import User, Chat, Channel, ChatAdminRights, ChatBannedRights, ChannelParticipantsKicked, ChannelParticipantsAdmins, InputChatPhoto, InputChatUploadedPhoto, InputChatPhotoEmpty, InputPeerUser, InputPeerChat, InputPeerChannel
-from telethon.tl.functions.contacts import SearchRequest
 from datetime import datetime, timedelta
 import json
 from typing import List, Dict, Optional, Union, Any
