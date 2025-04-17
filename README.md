@@ -3,7 +3,26 @@
 ![MCP Badge](https://badge.mcpx.dev)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-green?style=flat-square)](https://opensource.org/licenses/Apache-2.0)
 
+---
+
+## 🤖 MCP in Action
+
+Here's a demonstration of the Telegram MCP capabilities in Claude:
+
 ![Telegram MCP in action](screenshots/1.png)
+
+
+1. **Example: Asking Claude to analyze chat history and send a response:**
+
+![Telegram MCP Request](screenshots/2.png)
+
+2. **Successfully sent message to the group:**
+
+![Telegram MCP Result](screenshots/3.png)
+
+As you can see, the AI can seamlessly interact with your Telegram account, retrieving and displaying your chats, messages, and other data in a natural way.
+
+---
 
 A full-featured Telegram integration for Claude, Cursor, and any MCP-compatible client, powered by [Telethon](https://docs.telethon.dev/) and the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/). This project lets you interact with your Telegram account programmatically, automating everything from messaging to group management.
 
@@ -184,7 +203,6 @@ Edit `~/.cursor/mcp.json`:
 }
 ```
 
----
 
 ## 📝 Tool Examples with Code & Output
 
