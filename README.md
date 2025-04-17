@@ -27,7 +27,6 @@ As you can see, the AI can seamlessly interact with your Telegram account, retri
 
 A full-featured Telegram integration for Claude, Cursor, and any MCP-compatible client, powered by [Telethon](https://docs.telethon.dev/) and the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/). This project lets you interact with your Telegram account programmatically, automating everything from messaging to group management.
 
-**Maintained by [l1v0n1](https://github.com/l1v0n1). Forked from [chigwell/telegram-mcp](https://github.com/chigwell/telegram-mcp).**
 
 ---
 
