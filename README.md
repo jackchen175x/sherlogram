@@ -145,7 +145,7 @@ cd telegram-mcp
 ### 2. Create a Virtual Environment
 
 ```bash
-python3 -m venv .venv
+python -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
