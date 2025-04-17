@@ -93,7 +93,7 @@ This MCP server exposes a huge suite of Telegram tools. **Every major Telegram/T
 - **get_gif_search(query, limit)**: Search for GIFs
 - **send_gif(chat_id, gif_id)**: Send a GIF
 - **get_bot_info(bot_username)**: Get info about a bot
-- **set_bot_commands(bot_username, commands)**: Set bot commands
+- **set_bot_commands(bot_username, commands)**: Set bot commands (bot accounts only)
 
 ### Privacy, Settings, and Misc
 - **get_privacy_settings()**: Get privacy settings
@@ -140,6 +140,8 @@ Follow the prompts to authenticate and update your `.env` file.
 
 ### 4. Configure .env
 
+Copy `.env.example` to `.env` and fill in your values:
+
 ```
 TELEGRAM_API_ID=your_api_id_here
 TELEGRAM_API_HASH=your_api_hash_here
@@ -184,6 +186,36 @@ Edit `~/.cursor/mcp.json`:
 
 ---
 
+## 🧪 Testing
+
+A comprehensive test script is included to validate all functionality:
+
+```bash
+# Basic test (redirects output to file)
+python test.py > test_output.txt 2>&1
+```
+
+The test script uses environment variables from your `.env` file to configure testing parameters. See `.env.example` for all available test configuration options.
+
+### Test Configuration
+
+You can configure test parameters in your `.env` file:
+
+```
+# A safe chat ID where tests can send/delete messages
+TEST_CHAT_ID=your_saved_messages_id
+
+# A supergroup you admin for testing group operations
+TEST_SUPERGROUP_ID=your_supergroup_id
+
+# A test user account ID (not a real person unless they consent)
+TEST_USER_ID=test_user_id
+```
+
+The tests are designed to be non-destructive, but use caution when testing with real accounts.
+
+---
+
 ## 🎮 Usage Examples
 
 - "Show my recent chats"
@@ -194,8 +226,26 @@ Edit `~/.cursor/mcp.json`:
 - "Mute notifications for chat 123456789"
 - "Promote user 111 to admin in group 123456789"
 - "Search for public channels about 'news'"
+- "Join the Telegram group with invite link https://t.me/+AbCdEfGhIjK"
+- "Send a sticker to my Saved Messages"
+- "Get all my sticker sets"
 
 You can use these tools via natural language in Claude, Cursor, or any MCP-compatible client.
+
+---
+
+## 🧠 Error Handling & Robustness
+
+This implementation includes comprehensive error handling:
+
+- **Session management**: Works with both file-based and string-based sessions
+- **Error reporting**: Detailed errors logged to `mcp_errors.log`
+- **Graceful degradation**: Multiple fallback approaches for critical functions
+- **User-friendly messages**: Clear, actionable error messages instead of technical errors
+- **Account type detection**: Functions that require bot accounts detect and notify when used with user accounts
+- **Invite link processing**: Handles various link formats and already-member cases
+
+The code is designed to be robust against common Telegram API issues and limitations.
 
 ---
 
@@ -220,15 +270,20 @@ You can use these tools via natural language in Claude, Cursor, or any MCP-compa
 - **Never commit your `.env` or session string.**
 - The session string gives full access to your Telegram account—keep it safe!
 - All processing is local; no data is sent anywhere except Telegram's API.
+- Use `.env.example` as a template and keep your actual `.env` file private.
+- Test files are automatically excluded in `.gitignore`.
 
 ---
 
 ## 🛠️ Troubleshooting
 - **Check logs** in your MCP client (Claude/Cursor) and the terminal for errors.
+- **Detailed error logs** can be found in `mcp_errors.log`.
 - **Interpreter errors?** Make sure your `.venv` is created and selected.
 - **Database lock?** Use session string authentication, not file-based sessions.
 - **iCloud/Dropbox issues?** Move your project to a local path without spaces if you see odd errors.
 - **Regenerate session string** if you change your Telegram password or see auth errors.
+- **Bot-only functions** will show clear messages when used with regular user accounts.
+- **Test script failures?** Check test configuration in `.env` for valid test accounts/groups.
 
 ---
 

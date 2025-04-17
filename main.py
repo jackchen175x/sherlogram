@@ -9,7 +9,7 @@ from telethon import TelegramClient
 from telethon.sessions import StringSession
 import sqlite3
 from telethon import utils
-from telethon.tl.types import User, Chat, Channel
+from telethon.tl.types import User, Chat, Channel, ChatAdminRights, ChatBannedRights, ChannelParticipantsKicked, ChannelParticipantsAdmins, InputChatPhoto, InputChatUploadedPhoto, InputChatPhotoEmpty, InputPeerUser, InputPeerChat, InputPeerChannel
 from telethon.tl.functions.contacts import SearchRequest
 from datetime import datetime, timedelta
 import json
@@ -17,6 +17,16 @@ from typing import List, Dict, Optional, Union, Any
 from telethon import functions
 import mimetypes
 import logging
+
+# Helper function for JSON serialization of datetime, bytes, and other non-serializable objects
+def json_serializer(obj):
+    """Helper function to convert non-serializable objects for JSON serialization."""
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    if isinstance(obj, bytes):
+        return obj.decode('utf-8', errors='replace')
+    # Add other non-serializable types as needed
+    raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
 
 load_dotenv()
 
@@ -244,14 +254,16 @@ async def list_messages(chat_id: int, limit: int = 20, search_query: str = None,
         if from_date:
             try:
                 from_date_obj = datetime.strptime(from_date, "%Y-%m-%d")
+                # Make it timezone aware by adding UTC timezone info
+                from_date_obj = from_date_obj.replace(tzinfo=datetime.timezone.utc)
             except ValueError:
                 return f"Invalid from_date format. Use YYYY-MM-DD."
                 
         if to_date:
             try:
                 to_date_obj = datetime.strptime(to_date, "%Y-%m-%d")
-                # Set to end of day
-                to_date_obj = to_date_obj + timedelta(days=1, microseconds=-1)
+                # Set to end of day and make timezone aware
+                to_date_obj = (to_date_obj + timedelta(days=1, microseconds=-1)).replace(tzinfo=datetime.timezone.utc)
             except ValueError:
                 return f"Invalid to_date format. Use YYYY-MM-DD."
         
@@ -287,6 +299,7 @@ async def list_messages(chat_id: int, limit: int = 20, search_query: str = None,
         
         return "\n".join(lines)
     except Exception as e:
+        logger.exception(f"list_messages failed (chat_id={chat_id})")
         return f"Error retrieving messages: {e}"
 
 
@@ -365,15 +378,29 @@ async def get_chat(chat_id: int) -> str:
         result = []
         result.append(f"ID: {entity.id}")
         
+        is_channel = isinstance(entity, Channel)
+        is_chat = isinstance(entity, Chat)
+        is_user = isinstance(entity, User)
+
         if hasattr(entity, 'title'):
             result.append(f"Title: {entity.title}")
-            chat_type = "Channel" if getattr(entity, 'broadcast', False) else "Group"
+            chat_type = "Channel" if is_channel and getattr(entity, 'broadcast', False) else "Group"
+            if is_channel and getattr(entity, 'megagroup', False):
+                chat_type = "Supergroup"
+            elif is_chat:
+                chat_type = "Group (Basic)"
             result.append(f"Type: {chat_type}")
             if hasattr(entity, 'username') and entity.username:
                 result.append(f"Username: @{entity.username}")
-            if hasattr(entity, 'participants_count'):
-                result.append(f"Participants: {entity.participants_count}")
-        elif isinstance(entity, User):
+            
+            # Fetch participants count reliably
+            try:
+                 participants_count = (await client.get_participants(entity, limit=0)).total
+                 result.append(f"Participants: {participants_count}")
+            except Exception as pe:
+                 result.append(f"Participants: Error fetching ({pe})")
+
+        elif is_user:
             name = f"{entity.first_name}"
             if entity.last_name:
                 name += f" {entity.last_name}"
@@ -388,21 +415,29 @@ async def get_chat(chat_id: int) -> str:
             
         # Get last activity if it's a dialog
         try:
-            dialogs = await client.get_dialogs(limit=100)
-            for dialog in dialogs:
-                if dialog.entity.id == chat_id:
-                    result.append(f"Unread Messages: {dialog.unread_count}")
-                    if dialog.message:
-                        last_msg = dialog.message
-                        sender = getattr(last_msg.sender, 'first_name', '') or 'Unknown'
-                        result.append(f"Last Message: From {sender} at {last_msg.date}")
-                        result.append(f"Message: {last_msg.message or '[Media/No text]'}")
-                    break
-        except:
+            # Using get_dialogs might be slow if there are many dialogs
+            # Alternative: Get entity again via get_dialogs if needed for unread count
+            dialog = await client.get_dialogs(limit=1, offset_id=0, offset_peer=entity)
+            if dialog:
+                dialog = dialog[0]
+                result.append(f"Unread Messages: {dialog.unread_count}")
+                if dialog.message:
+                    last_msg = dialog.message
+                    sender_name = "Unknown"
+                    if last_msg.sender:
+                         sender_name = getattr(last_msg.sender, 'first_name', '') or getattr(last_msg.sender, 'title', 'Unknown')
+                         if hasattr(last_msg.sender, 'last_name') and last_msg.sender.last_name:
+                              sender_name += f" {last_msg.sender.last_name}"
+                    sender_name = sender_name.strip() or "Unknown"
+                    result.append(f"Last Message: From {sender_name} at {last_msg.date}")
+                    result.append(f"Message: {last_msg.message or '[Media/No text]'}")
+        except Exception as diag_ex:
+            logger.warning(f"Could not get dialog info for {chat_id}: {diag_ex}")
             pass
             
         return "\n".join(result)
     except Exception as e:
+        logger.exception(f"get_chat failed (chat_id={chat_id})")
         return f"Error getting chat info: {e}"
 
 
@@ -597,9 +632,12 @@ async def add_contact(phone: str, first_name: str, last_name: str = "") -> str:
         last_name: The contact's last name (optional).
     """
     try:
+        # Try to import the required types first
+        from telethon.tl.types import InputPhoneContact
+        
         result = await client(functions.contacts.ImportContactsRequest(
             contacts=[
-                functions.contacts.InputPhoneContact(
+                InputPhoneContact(
                     client_id=0,
                     phone=phone,
                     first_name=first_name,
@@ -610,8 +648,27 @@ async def add_contact(phone: str, first_name: str, last_name: str = "") -> str:
         if result.imported:
             return f"Contact {first_name} {last_name} added successfully."
         else:
-            return f"Contact not added. Response: {result.stringify()}"
+            return f"Contact not added. Response: {str(result)}"
+    except (ImportError, AttributeError) as type_err:
+        # Try alternative approach using raw API
+        try:
+            result = await client(functions.contacts.ImportContactsRequest(
+                contacts=[{
+                    'client_id': 0,
+                    'phone': phone,
+                    'first_name': first_name,
+                    'last_name': last_name
+                }]
+            ))
+            if hasattr(result, 'imported') and result.imported:
+                return f"Contact {first_name} {last_name} added successfully (alt method)."
+            else:
+                return f"Contact not added. Alternative method response: {str(result)}"
+        except Exception as alt_e:
+            logger.exception(f"add_contact (alt method) failed (phone={phone})")
+            return f"Error adding contact (alternative method): {alt_e}"
     except Exception as e:
+        logger.exception(f"add_contact failed (phone={phone})")
         return f"Error adding contact: {e}"
 
 
@@ -691,18 +748,54 @@ async def create_group(title: str, user_ids: list) -> str:
 @mcp.tool()
 async def invite_to_group(group_id: int, user_ids: list) -> str:
     """
-    Invite users to a group by group ID.
+    Invite users to a group or channel by group ID.
     Args:
-        group_id: The group chat ID.
+        group_id: The group/channel chat ID.
         user_ids: List of user IDs to invite.
     """
     try:
-        users = [await client.get_entity(uid) for uid in user_ids]
-        await client(functions.messages.AddChatUserRequest(chat_id=group_id, user_id=users[0], fwd_limit=0))
-        # Telethon only allows adding one user at a time for AddChatUserRequest (for basic groups)
-        # For supergroups/channels, use InviteToChannelRequest
-        return f"Invited users to group {group_id}."
+        chat_entity = await client.get_entity(group_id)
+        user_entities = []
+        for uid in user_ids:
+            try:
+                user_entities.append(await client.get_entity(uid))
+            except Exception as user_e:
+                 logger.error(f"Could not find user entity for ID {uid}: {user_e}")
+                 return f"Error finding user {uid}: {user_e}"
+
+        if not user_entities:
+             return "No valid user IDs provided or found."
+
+        if isinstance(chat_entity, Channel):
+            # Use InviteToChannelRequest for channels and supergroups
+            await client(functions.channels.InviteToChannelRequest(
+                channel=chat_entity,
+                users=user_entities
+            ))
+            return f"Invited {len(user_entities)} users to channel/supergroup {group_id}."
+        elif isinstance(chat_entity, Chat):
+            # Use AddChatUserRequest for basic groups (adds one user at a time)
+            added_count = 0
+            errors = []
+            for user in user_entities:
+                try:
+                    # Note: fwd_limit=0 might be needed depending on privacy settings
+                    await client(functions.messages.AddChatUserRequest(chat_id=group_id, user_id=user, fwd_limit=50))
+                    added_count += 1
+                except Exception as add_e:
+                     error_msg = f"Error inviting user {getattr(user, 'id', 'unknown')} to basic group {group_id}: {add_e}"
+                     logger.error(error_msg)
+                     errors.append(error_msg)
+            
+            result_message = f"Invited {added_count} users to basic group {group_id}."
+            if errors:
+                result_message += "\nErrors encountered:\n" + "\n".join(errors)
+            return result_message
+        else:
+             return f"Chat ID {group_id} is neither a Channel/Supergroup nor a basic Group."
+
     except Exception as e:
+        logger.exception(f"invite_to_group failed (group_id={group_id}, user_ids={user_ids})")
         return f"Error inviting users: {e}"
 
 
@@ -714,9 +807,21 @@ async def leave_chat(chat_id: int) -> str:
         chat_id: The chat ID to leave.
     """
     try:
-        await client(functions.messages.LeaveChatRequest(chat_id=chat_id))
-        return f"Left chat {chat_id}."
+        entity = await client.get_entity(chat_id)
+        if isinstance(entity, Channel):
+            # Leave channel or supergroup
+            await client(functions.channels.LeaveChannelRequest(channel=entity))
+            return f"Left channel/supergroup {chat_id}."
+        elif isinstance(entity, Chat):
+             # Leave basic group
+             me = await client.get_me(input_peer=True) # Get self entity for DeleteChatUserRequest
+             await client(functions.messages.DeleteChatUserRequest(chat_id=chat_id, user_id=me))
+             return f"Left basic group {chat_id}."
+        else:
+             # Cannot leave a user chat this way
+             return f"Cannot leave chat {chat_id} of type {type(entity)}. This function is for groups and channels."
     except Exception as e:
+        logger.exception(f"leave_chat failed (chat_id={chat_id})")
         return f"Error leaving chat: {e}"
 
 
@@ -918,22 +1023,47 @@ async def edit_chat_title(chat_id: int, title: str) -> str:
     Edit the title of a chat, group, or channel.
     """
     try:
-        await client(functions.messages.EditChatTitleRequest(chat_id=chat_id, title=title))
-        return f"Chat {chat_id} title updated."
+        entity = await client.get_entity(chat_id)
+        if isinstance(entity, Channel):
+             await client(functions.channels.EditTitleRequest(channel=entity, title=title))
+        elif isinstance(entity, Chat):
+             await client(functions.messages.EditChatTitleRequest(chat_id=chat_id, title=title))
+        else:
+             return f"Cannot edit title for this entity type ({type(entity)})."
+        return f"Chat {chat_id} title updated to '{title}'."
     except Exception as e:
+        logger.exception(f"edit_chat_title failed (chat_id={chat_id}, title='{title}')")
         return f"Error editing chat title: {e}"
 
 
 @mcp.tool()
 async def edit_chat_photo(chat_id: int, file_path: str) -> str:
     """
-    Edit the photo of a chat, group, or channel.
+    Edit the photo of a chat, group, or channel. Requires a file path to an image.
     """
     try:
-        file = await client.upload_file(file_path)
-        await client(functions.messages.EditChatPhotoRequest(chat_id=chat_id, photo=file))
+        if not os.path.isfile(file_path):
+             return f"Photo file not found: {file_path}"
+        if not os.access(file_path, os.R_OK):
+             return f"Photo file not readable: {file_path}"
+
+        entity = await client.get_entity(chat_id)
+        uploaded_file = await client.upload_file(file_path)
+
+        if isinstance(entity, Channel):
+             # For channels/supergroups, use EditPhotoRequest with InputChatUploadedPhoto
+             input_photo = InputChatUploadedPhoto(file=uploaded_file)
+             await client(functions.channels.EditPhotoRequest(channel=entity, photo=input_photo))
+        elif isinstance(entity, Chat):
+             # For basic groups, use EditChatPhotoRequest with InputChatUploadedPhoto
+             input_photo = InputChatUploadedPhoto(file=uploaded_file)
+             await client(functions.messages.EditChatPhotoRequest(chat_id=chat_id, photo=input_photo))
+        else:
+             return f"Cannot edit photo for this entity type ({type(entity)})."
+        
         return f"Chat {chat_id} photo updated."
     except Exception as e:
+        logger.exception(f"edit_chat_photo failed (chat_id={chat_id}, file_path='{file_path}')")
         return f"Error editing chat photo: {e}"
 
 
@@ -943,9 +1073,19 @@ async def delete_chat_photo(chat_id: int) -> str:
     Delete the photo of a chat, group, or channel.
     """
     try:
-        await client(functions.messages.EditChatPhotoRequest(chat_id=chat_id, photo=None))
+        entity = await client.get_entity(chat_id)
+        if isinstance(entity, Channel):
+            # Use InputChatPhotoEmpty for channels/supergroups
+             await client(functions.channels.EditPhotoRequest(channel=entity, photo=InputChatPhotoEmpty()))
+        elif isinstance(entity, Chat):
+             # Use None (or InputChatPhotoEmpty) for basic groups
+             await client(functions.messages.EditChatPhotoRequest(chat_id=chat_id, photo=InputChatPhotoEmpty()))
+        else:
+             return f"Cannot delete photo for this entity type ({type(entity)})."
+
         return f"Chat {chat_id} photo deleted."
     except Exception as e:
+        logger.exception(f"delete_chat_photo failed (chat_id={chat_id})")
         return f"Error deleting chat photo: {e}"
 
 
@@ -999,14 +1139,16 @@ async def ban_user(chat_id: int, user_id: int) -> str:
     import time
     try:
         user = await client.get_entity(user_id)
-        banned_rights = ChatBannedRights(until_date=int(time.time()) + 31536000, view_messages=True)
+        # Ban for 1 year (31536000 seconds)
+        banned_rights = ChatBannedRights(until_date=int(time.time()) + 31536000, view_messages=True) 
         await client(functions.channels.EditBannedRequest(
             channel=chat_id,
-            user_id=user,
+            participant=user,  # Fix: Use 'participant' instead of 'user_id'
             banned_rights=banned_rights
         ))
         return f"User {user_id} banned from chat {chat_id}."
     except Exception as e:
+        logger.exception(f"ban_user failed (chat_id={chat_id}, user_id={user_id})")
         return f"Error banning user: {e}"
 
 
@@ -1018,14 +1160,16 @@ async def unban_user(chat_id: int, user_id: int) -> str:
     from telethon.tl.types import ChatBannedRights
     try:
         user = await client.get_entity(user_id)
-        banned_rights = ChatBannedRights()
+        # Fix: Provide until_date=0 for unbanning
+        banned_rights = ChatBannedRights(until_date=0) 
         await client(functions.channels.EditBannedRequest(
             channel=chat_id,
-            user_id=user,
+            participant=user,
             banned_rights=banned_rights
         ))
         return f"User {user_id} unbanned in chat {chat_id}."
     except Exception as e:
+        logger.exception(f"unban_user failed (chat_id={chat_id}, user_id={user_id})")
         return f"Error unbanning user: {e}"
 
 
@@ -1035,9 +1179,12 @@ async def get_admins(chat_id: int) -> str:
     Get all admins in a group or channel.
     """
     try:
-        participants = await client.get_participants(chat_id, filter=functions.channels.ParticipantsAdmins())
-        return "\n".join([f"ID: {p.id}, Name: {getattr(p, 'first_name', '')} {getattr(p, 'last_name', '')}" for p in participants])
+        # Fix: Use the correct filter type ChannelParticipantsAdmins
+        participants = await client.get_participants(chat_id, filter=ChannelParticipantsAdmins()) 
+        lines = [f"ID: {p.id}, Name: {getattr(p, 'first_name', '')} {getattr(p, 'last_name', '')}".strip() for p in participants]
+        return "\n".join(lines) if lines else "No admins found."
     except Exception as e:
+        logger.exception(f"get_admins failed (chat_id={chat_id})")
         return f"Error getting admins: {e}"
 
 
@@ -1047,9 +1194,12 @@ async def get_banned_users(chat_id: int) -> str:
     Get all banned users in a group or channel.
     """
     try:
-        participants = await client.get_participants(chat_id, filter=functions.channels.ParticipantsBanned())
-        return "\n".join([f"ID: {p.id}, Name: {getattr(p, 'first_name', '')} {getattr(p, 'last_name', '')}" for p in participants])
+        # Fix: Use the correct filter type ChannelParticipantsKicked
+        participants = await client.get_participants(chat_id, filter=ChannelParticipantsKicked(q='')) 
+        lines = [f"ID: {p.id}, Name: {getattr(p, 'first_name', '')} {getattr(p, 'last_name', '')}".strip() for p in participants]
+        return "\n".join(lines) if lines else "No banned users found."
     except Exception as e:
+        logger.exception(f"get_banned_users failed (chat_id={chat_id})")
         return f"Error getting banned users: {e}"
 
 
@@ -1059,9 +1209,36 @@ async def get_invite_link(chat_id: int) -> str:
     Get the invite link for a group or channel.
     """
     try:
-        result = await client(functions.messages.ExportChatInviteRequest(chat_id=chat_id))
-        return result.link
+        entity = await client.get_entity(chat_id)
+        
+        if hasattr(functions.messages, 'ExportChatInviteRequest'):
+            try:
+                # Try using the peer parameter instead of chat_id
+                result = await client(functions.messages.ExportChatInviteRequest(
+                    peer=entity
+                ))
+                return result.link
+            except Exception as e1:
+                # If that fails, try alternative approach
+                logger.warning(f"First approach failed: {e1}, trying alternative")
+                
+        # Alternative approach using client.export_chat_invite_link
+        try:
+            invite_link = await client.export_chat_invite_link(entity)
+            return invite_link
+        except Exception as e2:
+            logger.warning(f"export_chat_invite_link failed: {e2}")
+            
+        # Last resort: Try directly fetching chat info
+        full_chat = await client(functions.messages.GetFullChatRequest(
+            chat_id=entity.id
+        ))
+        if hasattr(full_chat, 'full_chat') and hasattr(full_chat.full_chat, 'invite_link'):
+            return full_chat.full_chat.invite_link or "No invite link available."
+            
+        return "Could not retrieve invite link for this chat."
     except Exception as e:
+        logger.exception(f"get_invite_link failed (chat_id={chat_id})")
         return f"Error getting invite link: {e}"
 
 
@@ -1071,9 +1248,53 @@ async def join_chat_by_link(link: str) -> str:
     Join a chat by invite link.
     """
     try:
-        await client(functions.messages.ImportChatInviteRequest(hash=link.split('/')[-1]))
-        return f"Joined chat via link."
+        # Extract the hash from the invite link
+        if '/' in link:
+            hash_part = link.split('/')[-1]
+            if hash_part.startswith('+'):
+                hash_part = hash_part[1:]  # Remove the '+' if present
+        else:
+            hash_part = link
+            
+        # Try checking the invite before joining
+        try:
+            from telethon.errors import (InviteHashExpiredError, InviteHashInvalidError, 
+                                         UserAlreadyParticipantError, ChatAdminRequiredError,
+                                         UsersTooMuchError)
+                                         
+            # Try to check invite info first (will often fail if not a member)
+            invite_info = await client(functions.messages.CheckChatInviteRequest(hash=hash_part))
+            if hasattr(invite_info, 'chat') and invite_info.chat:
+                # If we got chat info, we're already a member
+                chat_title = getattr(invite_info.chat, 'title', 'Unknown Chat')
+                return f"You are already a member of this chat: {chat_title}"
+        except Exception as check_err:
+            # This often fails if not a member - just continue
+            pass
+            
+        # Join the chat using the hash
+        try:
+            result = await client(functions.messages.ImportChatInviteRequest(hash=hash_part))
+            if result and hasattr(result, 'chats') and result.chats:
+                chat_title = getattr(result.chats[0], 'title', 'Unknown Chat')
+                return f"Successfully joined chat: {chat_title}"
+            return f"Joined chat via invite hash."
+        except Exception as join_err:
+            err_str = str(join_err).lower()
+            if "expired" in err_str:
+                return "The invite hash has expired and is no longer valid."
+            elif "invalid" in err_str:
+                return "The invite hash is invalid or malformed."
+            elif "already" in err_str and "participant" in err_str:
+                return "You are already a member of this chat."
+            elif "admin" in err_str:
+                return "Cannot join this chat - requires admin approval."
+            elif "too much" in err_str or "too many" in err_str:
+                return "Cannot join this chat - it has reached maximum number of participants."
+            else:
+                raise  # Re-raise to be caught by the outer exception handler
     except Exception as e:
+        logger.exception(f"join_chat_by_link failed (link={link})")
         return f"Error joining chat: {e}"
 
 
@@ -1083,9 +1304,24 @@ async def export_chat_invite(chat_id: int) -> str:
     Export a chat invite link.
     """
     try:
-        result = await client(functions.messages.ExportChatInviteRequest(chat_id=chat_id))
-        return result.link
+        entity = await client.get_entity(chat_id)
+        
+        # This is essentially the same as get_invite_link, but kept separate for API consistency
+        try:
+            # Try using the peer parameter instead of chat_id
+            result = await client(functions.messages.ExportChatInviteRequest(
+                peer=entity
+            ))
+            return result.link
+        except Exception as e1:
+            # If that fails, try alternative approach
+            logger.warning(f"ExportChatInviteRequest failed: {e1}, trying alternative")
+            
+        # Alternative approach
+        invite_link = await client.export_chat_invite_link(entity)
+        return invite_link
     except Exception as e:
+        logger.exception(f"export_chat_invite failed (chat_id={chat_id})")
         return f"Error exporting chat invite: {e}"
 
 
@@ -1095,9 +1331,49 @@ async def import_chat_invite(hash: str) -> str:
     Import a chat invite by hash.
     """
     try:
-        await client(functions.messages.ImportChatInviteRequest(hash=hash))
-        return f"Joined chat via invite hash."
+        # Remove any prefixes like '+' if present
+        if hash.startswith('+'):
+            hash = hash[1:]
+            
+        # Try checking the invite before joining
+        try:
+            from telethon.errors import (InviteHashExpiredError, InviteHashInvalidError, 
+                                         UserAlreadyParticipantError, ChatAdminRequiredError,
+                                         UsersTooMuchError)
+                                         
+            # Try to check invite info first (will often fail if not a member)
+            invite_info = await client(functions.messages.CheckChatInviteRequest(hash=hash))
+            if hasattr(invite_info, 'chat') and invite_info.chat:
+                # If we got chat info, we're already a member
+                chat_title = getattr(invite_info.chat, 'title', 'Unknown Chat')
+                return f"You are already a member of this chat: {chat_title}"
+        except Exception as check_err:
+            # This often fails if not a member - just continue
+            pass
+            
+        # Join the chat using the hash
+        try:
+            result = await client(functions.messages.ImportChatInviteRequest(hash=hash))
+            if result and hasattr(result, 'chats') and result.chats:
+                chat_title = getattr(result.chats[0], 'title', 'Unknown Chat')
+                return f"Successfully joined chat: {chat_title}"
+            return f"Joined chat via invite hash."
+        except Exception as join_err:
+            err_str = str(join_err).lower()
+            if "expired" in err_str:
+                return "The invite hash has expired and is no longer valid."
+            elif "invalid" in err_str:
+                return "The invite hash is invalid or malformed."
+            elif "already" in err_str and "participant" in err_str:
+                return "You are already a member of this chat."
+            elif "admin" in err_str:
+                return "Cannot join this chat - requires admin approval."
+            elif "too much" in err_str or "too many" in err_str:
+                return "Cannot join this chat - it has reached maximum number of participants."
+            else:
+                raise  # Re-raise to be caught by the outer exception handler
     except Exception as e:
+        logger.exception(f"import_chat_invite failed (hash={hash})")
         return f"Error importing chat invite: {e}"
 
 
@@ -1295,12 +1571,32 @@ async def mute_chat(chat_id: int) -> str:
     Mute notifications for a chat.
     """
     try:
+        from telethon.tl.types import InputPeerNotifySettings
+        
+        peer = await client.get_entity(chat_id)
         await client(functions.account.UpdateNotifySettingsRequest(
-            peer=await client.get_entity(chat_id),
-            settings=functions.account.InputPeerNotifySettings(mute_until=2**31-1)
+            peer=peer,
+            settings=InputPeerNotifySettings(mute_until=2**31-1)
         ))
         return f"Chat {chat_id} muted."
+    except (ImportError, AttributeError) as type_err:
+        try:
+            # Alternative approach directly using raw API
+            peer = await client.get_input_entity(chat_id)
+            await client(functions.account.UpdateNotifySettingsRequest(
+                peer=peer,
+                settings={
+                    'mute_until': 2**31-1,  # Far future
+                    'show_previews': False,
+                    'silent': True
+                }
+            ))
+            return f"Chat {chat_id} muted (using alternative method)."
+        except Exception as alt_e:
+            logger.exception(f"mute_chat (alt method) failed (chat_id={chat_id})")
+            return f"Error muting chat (alternative method): {alt_e}"
     except Exception as e:
+        logger.exception(f"mute_chat failed (chat_id={chat_id})")
         return f"Error muting chat: {e}"
 
 
@@ -1310,12 +1606,32 @@ async def unmute_chat(chat_id: int) -> str:
     Unmute notifications for a chat.
     """
     try:
+        from telethon.tl.types import InputPeerNotifySettings
+        
+        peer = await client.get_entity(chat_id)
         await client(functions.account.UpdateNotifySettingsRequest(
-            peer=await client.get_entity(chat_id),
-            settings=functions.account.InputPeerNotifySettings(mute_until=0)
+            peer=peer,
+            settings=InputPeerNotifySettings(mute_until=0)
         ))
         return f"Chat {chat_id} unmuted."
+    except (ImportError, AttributeError) as type_err:
+        try:
+            # Alternative approach directly using raw API
+            peer = await client.get_input_entity(chat_id)
+            await client(functions.account.UpdateNotifySettingsRequest(
+                peer=peer,
+                settings={
+                    'mute_until': 0,  # Unmute (current time)
+                    'show_previews': True,
+                    'silent': False
+                }
+            ))
+            return f"Chat {chat_id} unmuted (using alternative method)."
+        except Exception as alt_e:
+            logger.exception(f"unmute_chat (alt method) failed (chat_id={chat_id})")
+            return f"Error unmuting chat (alternative method): {alt_e}"
     except Exception as e:
+        logger.exception(f"unmute_chat failed (chat_id={chat_id})")
         return f"Error unmuting chat: {e}"
 
 
@@ -1392,11 +1708,34 @@ async def get_gif_search(query: str, limit: int = 10) -> str:
         limit: Max number of GIFs to return.
     """
     try:
-        result = await client(functions.messages.SearchGifsRequest(q=query, offset_id=0, limit=limit))
-        if not result.gifs:
-            return "No GIFs found for this query."
-        return json.dumps([g.document.id for g in result.gifs], indent=2)
+        # Try approach 1: SearchGifsRequest
+        try:
+            result = await client(functions.messages.SearchGifsRequest(q=query, offset_id=0, limit=limit))
+            if not result.gifs:
+                return "[]"
+            return json.dumps([g.document.id for g in result.gifs], indent=2, default=json_serializer)
+        except (AttributeError, ImportError):
+            # Fallback approach: Use SearchRequest with GIF filter
+            try:
+                from telethon.tl.types import InputMessagesFilterGif
+                result = await client(functions.messages.SearchRequest(
+                    peer="gif", q=query, filter=InputMessagesFilterGif(), 
+                    min_date=None, max_date=None, offset_id=0, add_offset=0, 
+                    limit=limit, max_id=0, min_id=0, hash=0
+                ))
+                if not result or not hasattr(result, 'messages') or not result.messages:
+                    return "[]"
+                # Extract document IDs from any messages with media
+                gif_ids = []
+                for msg in result.messages:
+                    if hasattr(msg, 'media') and msg.media and hasattr(msg.media, 'document'):
+                        gif_ids.append(msg.media.document.id)
+                return json.dumps(gif_ids, default=json_serializer)
+            except Exception as inner_e:
+                # Last resort: Try to fetch from a public bot
+                return f"Could not search GIFs using available methods: {inner_e}"
     except Exception as e:
+        logger.exception(f"get_gif_search failed (query={query}, limit={limit})")
         return f"Error searching GIFs: {e}"
 
 
@@ -1424,9 +1763,34 @@ async def get_bot_info(bot_username: str) -> str:
     Get information about a bot by username.
     """
     try:
-        result = await client(functions.users.GetFullUserRequest(id=bot_username))
-        return json.dumps(result.to_dict(), indent=2)
+        entity = await client.get_entity(bot_username)
+        if not entity:
+            return f"Bot with username {bot_username} not found."
+            
+        result = await client(functions.users.GetFullUserRequest(id=entity))
+        
+        # Create a more structured, serializable response
+        if hasattr(result, 'to_dict'):
+            # Use custom serializer to handle non-serializable types
+            return json.dumps(result.to_dict(), indent=2, default=json_serializer)
+        else:
+            # Fallback if to_dict is not available
+            info = {
+                "bot_info": {
+                    "id": entity.id,
+                    "username": entity.username,
+                    "first_name": entity.first_name,
+                    "last_name": getattr(entity, "last_name", ""),
+                    "is_bot": getattr(entity, "bot", False),
+                    "verified": getattr(entity, "verified", False),
+                }
+            }
+            if hasattr(result, "full_user") and hasattr(result.full_user, "about"):
+                info["bot_info"]["about"] = result.full_user.about
+                
+            return json.dumps(info, indent=2)
     except Exception as e:
+        logger.exception(f"get_bot_info failed (bot_username={bot_username})")
         return f"Error getting bot info: {e}"
 
 
@@ -1434,16 +1798,45 @@ async def get_bot_info(bot_username: str) -> str:
 async def set_bot_commands(bot_username: str, commands: list) -> str:
     """
     Set bot commands for a bot you own.
+    Note: This function can only be used if the Telegram client is a bot account.
+    Regular user accounts cannot set bot commands.
+    
+    Args:
+        bot_username: The username of the bot to set commands for.
+        commands: List of command dictionaries with 'command' and 'description' keys.
     """
-    from telethon.tl.types import BotCommand
     try:
-        await client(functions.bots.SetBotCommandsRequest(
-            scope=bot_username,
-            lang_code='',
-            commands=[BotCommand(command=c['command'], description=c['description']) for c in commands]
+        # First check if the current client is a bot
+        me = await client.get_me()
+        if not getattr(me, 'bot', False):
+            return "Error: This function can only be used by bot accounts. Your current Telegram account is a regular user account, not a bot."
+            
+        # Import required types
+        from telethon.tl.types import BotCommand, BotCommandScopeDefault
+        from telethon.tl.functions.bots import SetBotCommandsRequest
+        
+        # Create BotCommand objects from the command dictionaries
+        bot_commands = [
+            BotCommand(command=c['command'], description=c['description']) 
+            for c in commands
+        ]
+        
+        # Get the bot entity
+        bot = await client.get_entity(bot_username)
+        
+        # Set the commands with proper scope
+        await client(SetBotCommandsRequest(
+            scope=BotCommandScopeDefault(),
+            lang_code="en",  # Default language code
+            commands=bot_commands
         ))
+        
         return f"Bot commands set for {bot_username}."
+    except ImportError as ie:
+        logger.exception(f"set_bot_commands failed - ImportError: {ie}")
+        return f"Error: Your Telethon version doesn't support SetBotCommandsRequest. Please update Telethon."
     except Exception as e:
+        logger.exception(f"set_bot_commands failed (bot_username={bot_username})")
         return f"Error setting bot commands: {e}"
 
 
@@ -1491,9 +1884,23 @@ async def get_recent_actions(chat_id: int) -> str:
     Get recent admin actions (admin log) in a group or channel.
     """
     try:
-        result = await client(functions.channels.GetAdminLogRequest(channel=chat_id, q="", events_filter=None, admins=[], max_id=0, min_id=0, limit=20))
-        return json.dumps([e.to_dict() for e in result.events], indent=2)
+        result = await client(functions.channels.GetAdminLogRequest(
+            channel=chat_id, 
+            q="", 
+            events_filter=None, 
+            admins=[], 
+            max_id=0, 
+            min_id=0, 
+            limit=20
+        ))
+        
+        if not result or not result.events:
+            return "No recent admin actions found."
+            
+        # Use the custom serializer to handle datetime objects
+        return json.dumps([e.to_dict() for e in result.events], indent=2, default=json_serializer)
     except Exception as e:
+        logger.exception(f"get_recent_actions failed (chat_id={chat_id})")
         return f"Error getting recent actions: {e}"
 
 
@@ -1504,9 +1911,22 @@ async def get_pinned_messages(chat_id: int) -> str:
     """
     try:
         entity = await client.get_entity(chat_id)
-        messages = await client.get_messages(entity, filter=functions.messages.FilterPinned())
-        return "\n".join([f"ID: {m.id} | {m.date} | {m.message}" for m in messages])
+        # Use correct filter based on Telethon version
+        try:
+            # Try newer Telethon approach
+            from telethon.tl.types import InputMessagesFilterPinned
+            messages = await client.get_messages(entity, filter=InputMessagesFilterPinned())
+        except (ImportError, AttributeError):
+            # Fallback - try without filter and manually filter pinned
+            all_messages = await client.get_messages(entity, limit=50)
+            messages = [m for m in all_messages if getattr(m, 'pinned', False)]
+            
+        if not messages:
+            return "No pinned messages found in this chat."
+            
+        return "\n".join([f"ID: {m.id} | {m.date} | {m.message or '[Media/No text]'}" for m in messages])
     except Exception as e:
+        logger.exception(f"get_pinned_messages failed (chat_id={chat_id})")
         return f"Error getting pinned messages: {e}"
 
 
