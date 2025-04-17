@@ -186,33 +186,269 @@ Edit `~/.cursor/mcp.json`:
 
 ---
 
-## 🧪 Testing
+## 📝 Tool Examples with Code & Output
 
-A comprehensive test script is included to validate all functionality:
+Below are examples of the most commonly used tools with their implementation and sample output.
 
-```bash
-# Basic test (redirects output to file)
-python test.py > test_output.txt 2>&1
+### Getting Your Chats
+
+```python
+@mcp.tool()
+async def get_chats(page: int = 1, page_size: int = 20) -> str:
+    """
+    Get a paginated list of chats.
+    Args:
+        page: Page number (1-indexed).
+        page_size: Number of chats per page.
+    """
+    try:
+        dialogs = await client.get_dialogs()
+        start = (page - 1) * page_size
+        end = start + page_size
+        if start >= len(dialogs):
+            return "Page out of range."
+        chats = dialogs[start:end]
+        lines = []
+        for dialog in chats:
+            entity = dialog.entity
+            chat_id = entity.id
+            title = getattr(entity, "title", None) or getattr(entity, "first_name", "Unknown")
+            lines.append(f"Chat ID: {chat_id}, Title: {title}")
+        return "\n".join(lines)
+    except Exception as e:
+        logger.exception(f"get_chats failed (page={page}, page_size={page_size})")
+        return "An error occurred (code: GETCHATS-ERR-001). Check mcp_errors.log for details."
 ```
 
-The test script uses environment variables from your `.env` file to configure testing parameters. See `.env.example` for all available test configuration options.
-
-### Test Configuration
-
-You can configure test parameters in your `.env` file:
-
+Example output:
 ```
-# A safe chat ID where tests can send/delete messages
-TEST_CHAT_ID=your_saved_messages_id
-
-# A supergroup you admin for testing group operations
-TEST_SUPERGROUP_ID=your_supergroup_id
-
-# A test user account ID (not a real person unless they consent)
-TEST_USER_ID=test_user_id
+Chat ID: 123456789, Title: John Doe
+Chat ID: -100987654321, Title: My Project Group
+Chat ID: 111223344, Title: Jane Smith
+Chat ID: -200123456789, Title: News Channel
 ```
 
-The tests are designed to be non-destructive, but use caution when testing with real accounts.
+### Sending Messages
+
+```python
+@mcp.tool()
+async def send_message(chat_id: int, message: str) -> str:
+    """
+    Send a message to a specific chat.
+    Args:
+        chat_id: The ID of the chat.
+        message: The message content to send.
+    """
+    try:
+        entity = await client.get_entity(chat_id)
+        await client.send_message(entity, message)
+        return "Message sent successfully."
+    except Exception as e:
+        logger.exception(f"send_message failed (chat_id={chat_id})")
+        return "An error occurred (code: SENDMSG-ERR-001). Check mcp_errors.log for details."
+```
+
+Example output:
+```
+Message sent successfully.
+```
+
+### Getting Chat Invite Links
+
+The `get_invite_link` function is particularly robust with multiple fallback methods:
+
+```python
+@mcp.tool()
+async def get_invite_link(chat_id: int) -> str:
+    """
+    Get the invite link for a group or channel.
+    """
+    try:
+        entity = await client.get_entity(chat_id)
+        
+        # Try using ExportChatInviteRequest first
+        try:
+            from telethon.tl import functions
+            result = await client(functions.messages.ExportChatInviteRequest(
+                peer=entity
+            ))
+            return result.link
+        except AttributeError:
+            # If the function doesn't exist in the current Telethon version
+            logger.warning("ExportChatInviteRequest not available, using alternative method")
+        except Exception as e1:
+            # If that fails, log and try alternative approach
+            logger.warning(f"ExportChatInviteRequest failed: {e1}")
+            
+        # Alternative approach using client.export_chat_invite_link
+        try:
+            invite_link = await client.export_chat_invite_link(entity)
+            return invite_link
+        except Exception as e2:
+            logger.warning(f"export_chat_invite_link failed: {e2}")
+            
+        # Last resort: Try directly fetching chat info
+        try:
+            if isinstance(entity, (Chat, Channel)):
+                full_chat = await client(functions.messages.GetFullChatRequest(
+                    chat_id=entity.id
+                ))
+                if hasattr(full_chat, 'full_chat') and hasattr(full_chat.full_chat, 'invite_link'):
+                    return full_chat.full_chat.invite_link or "No invite link available."
+        except Exception as e3:
+            logger.warning(f"GetFullChatRequest failed: {e3}")
+            
+        return "Could not retrieve invite link for this chat."
+    except Exception as e:
+        logger.exception(f"get_invite_link failed (chat_id={chat_id})")
+        return f"Error getting invite link: {e}"
+```
+
+Example output:
+```
+https://t.me/+AbCdEfGhIjKlMnOp
+```
+
+### Joining Chats via Invite Links
+
+```python
+@mcp.tool()
+async def join_chat_by_link(link: str) -> str:
+    """
+    Join a chat by invite link.
+    """
+    try:
+        # Extract the hash from the invite link
+        if '/' in link:
+            hash_part = link.split('/')[-1]
+            if hash_part.startswith('+'):
+                hash_part = hash_part[1:]  # Remove the '+' if present
+        else:
+            hash_part = link
+            
+        # Try checking the invite before joining
+        try:
+            # Try to check invite info first (will often fail if not a member)
+            invite_info = await client(functions.messages.CheckChatInviteRequest(hash=hash_part))
+            if hasattr(invite_info, 'chat') and invite_info.chat:
+                # If we got chat info, we're already a member
+                chat_title = getattr(invite_info.chat, 'title', 'Unknown Chat')
+                return f"You are already a member of this chat: {chat_title}"
+        except Exception:
+            # This often fails if not a member - just continue
+            pass
+            
+        # Join the chat using the hash
+        result = await client(functions.messages.ImportChatInviteRequest(hash=hash_part))
+        if result and hasattr(result, 'chats') and result.chats:
+            chat_title = getattr(result.chats[0], 'title', 'Unknown Chat')
+            return f"Successfully joined chat: {chat_title}"
+        return f"Joined chat via invite hash."
+    except Exception as e:
+        err_str = str(e).lower()
+        if "expired" in err_str:
+            return "The invite hash has expired and is no longer valid."
+        elif "invalid" in err_str:
+            return "The invite hash is invalid or malformed."
+        elif "already" in err_str and "participant" in err_str:
+            return "You are already a member of this chat."
+        logger.exception(f"join_chat_by_link failed (link={link})")
+        return f"Error joining chat: {e}"
+```
+
+Example output:
+```
+Successfully joined chat: Developer Community
+```
+
+### Searching Public Chats
+
+```python
+@mcp.tool()
+async def search_public_chats(query: str) -> str:
+    """
+    Search for public chats, channels, or bots by username or title.
+    """
+    try:
+        result = await client(functions.contacts.SearchRequest(q=query, limit=20))
+        return json.dumps([format_entity(u) for u in result.users], indent=2)
+    except Exception as e:
+        return f"Error searching public chats: {e}"
+```
+
+Example output:
+```json
+[
+  {
+    "id": 123456789,
+    "name": "TelegramBot",
+    "type": "user",
+    "username": "telegram_bot"
+  },
+  {
+    "id": 987654321,
+    "name": "Telegram News",
+    "type": "user",
+    "username": "telegram_news"
+  }
+]
+```
+
+### Getting Direct Chats with Contacts
+
+```python
+@mcp.tool()
+async def get_direct_chat_by_contact(contact_query: str) -> str:
+    """
+    Find a direct chat with a specific contact by name, username, or phone.
+    
+    Args:
+        contact_query: Name, username, or phone number to search for.
+    """
+    try:
+        # Fetch all contacts using the correct Telethon method
+        result = await client(functions.contacts.GetContactsRequest(hash=0))
+        contacts = result.users
+        found_contacts = []
+        for contact in contacts:
+            if not contact:
+                continue
+            name = f"{getattr(contact, 'first_name', '')} {getattr(contact, 'last_name', '')}".strip()
+            username = getattr(contact, 'username', '')
+            phone = getattr(contact, 'phone', '')
+            if (contact_query.lower() in name.lower() or 
+                (username and contact_query.lower() in username.lower()) or 
+                (phone and contact_query in phone)):
+                found_contacts.append(contact)
+        if not found_contacts:
+            return f"No contacts found matching '{contact_query}'."
+        # If we found contacts, look for direct chats with them
+        results = []
+        dialogs = await client.get_dialogs()
+        for contact in found_contacts:
+            contact_name = f"{getattr(contact, 'first_name', '')} {getattr(contact, 'last_name', '')}".strip()
+            for dialog in dialogs:
+                if isinstance(dialog.entity, User) and dialog.entity.id == contact.id:
+                    chat_info = f"Chat ID: {dialog.entity.id}, Contact: {contact_name}"
+                    if getattr(contact, 'username', ''):
+                        chat_info += f", Username: @{contact.username}"
+                    if dialog.unread_count:
+                        chat_info += f", Unread: {dialog.unread_count}"
+                    results.append(chat_info)
+                    break
+        
+        if not results:
+            return f"Found contacts matching '{contact_query}', but no direct chats with them."
+        
+        return "\n".join(results)
+    except Exception as e:
+        return f"Error searching for direct chat: {e}"
+```
+
+Example output:
+```
+Chat ID: 123456789, Contact: John Smith, Username: @johnsmith, Unread: 3
+```
 
 ---
 

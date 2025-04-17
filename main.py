@@ -17,6 +17,7 @@ from typing import List, Dict, Optional, Union, Any
 from telethon import functions
 import mimetypes
 import logging
+import telethon.errors.rpcerrorlist
 
 # Helper function for JSON serialization of datetime, bytes, and other non-serializable objects
 def json_serializer(obj):
@@ -46,13 +47,36 @@ else:
     # Use file-based session
     client = TelegramClient(TELEGRAM_SESSION_NAME, TELEGRAM_API_ID, TELEGRAM_API_HASH)
 
-# Setup logger for error reporting
-logging.basicConfig(
-    filename='mcp_errors.log',
-    level=logging.ERROR,
-    format='%(asctime)s %(levelname)s %(name)s %(message)s'
-)
-logger = logging.getLogger("mcp")
+# Setup robust logging with both file and console output
+logger = logging.getLogger("telegram_mcp")
+logger.setLevel(logging.ERROR)  # Set to ERROR for production, INFO for debugging
+
+# Create console handler
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.ERROR)  # Set to ERROR for production, INFO for debugging
+
+# Create file handler with absolute path
+script_dir = os.path.dirname(os.path.abspath(__file__))
+log_file_path = os.path.join(script_dir, "mcp_errors.log")
+
+try:
+    file_handler = logging.FileHandler(log_file_path, mode='a')  # Append mode
+    file_handler.setLevel(logging.ERROR)
+    
+    # Create formatter and add to handlers
+    formatter = logging.Formatter('%(asctime)s %(levelname)s %(name)s %(message)s')
+    console_handler.setFormatter(formatter)
+    file_handler.setFormatter(formatter)
+    
+    # Add handlers to logger
+    logger.addHandler(console_handler)
+    logger.addHandler(file_handler)
+    
+    logger.info(f"Logging initialized to {log_file_path}")
+except Exception as log_error:
+    print(f"WARNING: Error setting up log file: {log_error}")
+    # Fallback to console-only logging
+    logger.addHandler(console_handler)
 
 def format_entity(entity) -> Dict[str, Any]:
     """Helper function to format entity information consistently."""
@@ -255,7 +279,14 @@ async def list_messages(chat_id: int, limit: int = 20, search_query: str = None,
             try:
                 from_date_obj = datetime.strptime(from_date, "%Y-%m-%d")
                 # Make it timezone aware by adding UTC timezone info
-                from_date_obj = from_date_obj.replace(tzinfo=datetime.timezone.utc)
+                # Use datetime.timezone.utc for Python 3.9+ or import timezone directly for 3.13+
+                try:
+                    # For Python 3.9+
+                    from_date_obj = from_date_obj.replace(tzinfo=datetime.timezone.utc)
+                except AttributeError:
+                    # For Python 3.13+
+                    from datetime import timezone
+                    from_date_obj = from_date_obj.replace(tzinfo=timezone.utc)
             except ValueError:
                 return f"Invalid from_date format. Use YYYY-MM-DD."
                 
@@ -263,7 +294,13 @@ async def list_messages(chat_id: int, limit: int = 20, search_query: str = None,
             try:
                 to_date_obj = datetime.strptime(to_date, "%Y-%m-%d")
                 # Set to end of day and make timezone aware
-                to_date_obj = (to_date_obj + timedelta(days=1, microseconds=-1)).replace(tzinfo=datetime.timezone.utc)
+                to_date_obj = to_date_obj + timedelta(days=1, microseconds=-1)
+                # Add timezone info
+                try:
+                    to_date_obj = to_date_obj.replace(tzinfo=datetime.timezone.utc)
+                except AttributeError:
+                    from datetime import timezone
+                    to_date_obj = to_date_obj.replace(tzinfo=timezone.utc)
             except ValueError:
                 return f"Invalid to_date format. Use YYYY-MM-DD."
         
@@ -732,96 +769,169 @@ async def get_me() -> str:
 @mcp.tool()
 async def create_group(title: str, user_ids: list) -> str:
     """
-    Create a new group with the given title and user IDs.
+    Create a new group or supergroup and add users.
+    
     Args:
-        title: The group name.
-        user_ids: List of user IDs to add to the group.
+        title: Title for the new group
+        user_ids: List of user IDs to add to the group
     """
     try:
-        users = [await client.get_entity(uid) for uid in user_ids]
-        result = await client(functions.messages.CreateChatRequest(users=users, title=title))
-        return f"Group '{title}' created with ID: {result.chats[0].id}"
+        # Convert user IDs to entities
+        users = []
+        for user_id in user_ids:
+            try:
+                user = await client.get_entity(user_id)
+                users.append(user)
+            except Exception as e:
+                logger.error(f"Failed to get entity for user ID {user_id}: {e}")
+                return f"Error: Could not find user with ID {user_id}"
+        
+        if not users:
+            return "Error: No valid users provided"
+            
+        # Create the group with the users
+        try:
+            # Create a new chat with selected users
+            result = await client(functions.messages.CreateChatRequest(
+                users=users,
+                title=title
+            ))
+            
+            # Check what type of response we got
+            if hasattr(result, 'chats') and result.chats:
+                created_chat = result.chats[0]
+                return f"Group created with ID: {created_chat.id}"
+            elif hasattr(result, 'chat') and result.chat:
+                return f"Group created with ID: {result.chat.id}"
+            elif hasattr(result, 'chat_id'):
+                return f"Group created with ID: {result.chat_id}"
+            else:
+                # If we can't determine the chat ID directly from the result
+                # Try to find it in recent dialogs
+                await asyncio.sleep(1)  # Give Telegram a moment to register the new group
+                dialogs = await client.get_dialogs(limit=5)  # Get recent dialogs
+                for dialog in dialogs:
+                    if dialog.title == title:
+                        return f"Group created with ID: {dialog.id}"
+                
+                # If we still can't find it, at least return success
+                return f"Group created successfully. Please check your recent chats for '{title}'."
+                
+        except Exception as create_err:
+            if "PEER_FLOOD" in str(create_err):
+                return "Error: Cannot create group due to Telegram limits. Try again later."
+            else:
+                raise  # Let the outer exception handler catch it
     except Exception as e:
+        logger.exception(f"create_group failed (title={title}, user_ids={user_ids})")
         return f"Error creating group: {e}"
 
 
 @mcp.tool()
 async def invite_to_group(group_id: int, user_ids: list) -> str:
     """
-    Invite users to a group or channel by group ID.
+    Invite users to a group or channel.
+    
     Args:
-        group_id: The group/channel chat ID.
+        group_id: The ID of the group/channel.
         user_ids: List of user IDs to invite.
     """
     try:
-        chat_entity = await client.get_entity(group_id)
-        user_entities = []
-        for uid in user_ids:
+        entity = await client.get_entity(group_id)
+        users_to_add = []
+        
+        for user_id in user_ids:
             try:
-                user_entities.append(await client.get_entity(uid))
-            except Exception as user_e:
-                 logger.error(f"Could not find user entity for ID {uid}: {user_e}")
-                 return f"Error finding user {uid}: {user_e}"
-
-        if not user_entities:
-             return "No valid user IDs provided or found."
-
-        if isinstance(chat_entity, Channel):
-            # Use InviteToChannelRequest for channels and supergroups
-            await client(functions.channels.InviteToChannelRequest(
-                channel=chat_entity,
-                users=user_entities
+                user = await client.get_entity(user_id)
+                users_to_add.append(user)
+            except ValueError as e:
+                return f"Error: User with ID {user_id} could not be found. {e}"
+        
+        try:
+            result = await client(functions.channels.InviteToChannelRequest(
+                channel=entity,
+                users=users_to_add
             ))
-            return f"Invited {len(user_entities)} users to channel/supergroup {group_id}."
-        elif isinstance(chat_entity, Chat):
-            # Use AddChatUserRequest for basic groups (adds one user at a time)
-            added_count = 0
-            errors = []
-            for user in user_entities:
-                try:
-                    # Note: fwd_limit=0 might be needed depending on privacy settings
-                    await client(functions.messages.AddChatUserRequest(chat_id=group_id, user_id=user, fwd_limit=50))
-                    added_count += 1
-                except Exception as add_e:
-                     error_msg = f"Error inviting user {getattr(user, 'id', 'unknown')} to basic group {group_id}: {add_e}"
-                     logger.error(error_msg)
-                     errors.append(error_msg)
             
-            result_message = f"Invited {added_count} users to basic group {group_id}."
-            if errors:
-                result_message += "\nErrors encountered:\n" + "\n".join(errors)
-            return result_message
-        else:
-             return f"Chat ID {group_id} is neither a Channel/Supergroup nor a basic Group."
-
+            invited_count = 0
+            if hasattr(result, 'users') and result.users:
+                invited_count = len(result.users)
+            elif hasattr(result, 'count'):
+                invited_count = result.count
+            
+            return f"Successfully invited {invited_count} users to {entity.title}"
+        except telethon.errors.rpcerrorlist.UserNotMutualContactError:
+            return "Error: Cannot invite users who are not mutual contacts. Please ensure the users are in your contacts and have added you back."
+        except telethon.errors.rpcerrorlist.UserPrivacyRestrictedError:
+            return "Error: One or more users have privacy settings that prevent you from adding them."
+        except Exception as e:
+            return f"Error inviting users: {e}"
+            
     except Exception as e:
-        logger.exception(f"invite_to_group failed (group_id={group_id}, user_ids={user_ids})")
-        return f"Error inviting users: {e}"
+        logger.error(f"telegram_mcp invite_to_group failed (group_id={group_id}, user_ids={user_ids})", exc_info=True)
+        return f"Error: {e}"
 
 
 @mcp.tool()
 async def leave_chat(chat_id: int) -> str:
     """
     Leave a group or channel by chat ID.
+    
     Args:
         chat_id: The chat ID to leave.
     """
     try:
         entity = await client.get_entity(chat_id)
+        
+        # Check the entity type carefully
         if isinstance(entity, Channel):
-            # Leave channel or supergroup
-            await client(functions.channels.LeaveChannelRequest(channel=entity))
-            return f"Left channel/supergroup {chat_id}."
+            # Handle both channels and supergroups (which are also channels in Telegram)
+            try:
+                await client(functions.channels.LeaveChannelRequest(channel=entity))
+                chat_name = getattr(entity, 'title', str(chat_id))
+                return f"Left channel/supergroup {chat_name} (ID: {chat_id})."
+            except Exception as chan_err:
+                return f"Error leaving channel: {chan_err}"
+                
         elif isinstance(entity, Chat):
-             # Leave basic group
-             me = await client.get_me(input_peer=True) # Get self entity for DeleteChatUserRequest
-             await client(functions.messages.DeleteChatUserRequest(chat_id=chat_id, user_id=me))
-             return f"Left basic group {chat_id}."
+            # Traditional basic groups (not supergroups)
+            try:
+                # First try with InputPeerUser
+                me = await client.get_me(input_peer=True)
+                await client(functions.messages.DeleteChatUserRequest(
+                    chat_id=entity.id,  # Use the entity ID directly
+                    user_id=me
+                ))
+                chat_name = getattr(entity, 'title', str(chat_id))
+                return f"Left basic group {chat_name} (ID: {chat_id})."
+            except Exception as chat_err:
+                # If the above fails, try the second approach
+                logger.warning(f"First leave attempt failed: {chat_err}, trying alternative method")
+                
+                try:
+                    # Alternative approach - sometimes this works better
+                    me_full = await client.get_me()
+                    await client(functions.messages.DeleteChatUserRequest(
+                        chat_id=entity.id,
+                        user_id=me_full.id
+                    ))
+                    chat_name = getattr(entity, 'title', str(chat_id))
+                    return f"Left basic group {chat_name} (ID: {chat_id})."
+                except Exception as alt_err:
+                    return f"Error leaving basic group: {alt_err}"
         else:
-             # Cannot leave a user chat this way
-             return f"Cannot leave chat {chat_id} of type {type(entity)}. This function is for groups and channels."
+            # Cannot leave a user chat this way
+            entity_type = type(entity).__name__
+            return f"Cannot leave chat ID {chat_id} of type {entity_type}. This function is for groups and channels only."
+            
     except Exception as e:
         logger.exception(f"leave_chat failed (chat_id={chat_id})")
+        
+        # Provide helpful hint for common errors
+        error_str = str(e).lower()
+        if "invalid" in error_str and "chat" in error_str:
+            return "Error: This appears to be a channel/supergroup. Please check the chat ID and try again."
+        
         return f"Error leaving chat: {e}"
 
 
@@ -935,12 +1045,24 @@ async def delete_profile_photo() -> str:
 @mcp.tool()
 async def get_privacy_settings() -> str:
     """
-    Get your privacy settings.
+    Get your privacy settings for last seen status.
     """
     try:
-        settings = await client(functions.account.GetPrivacyRequest(key='status_timestamp'))
-        return str(settings)
+        # Import needed types directly
+        from telethon.tl.types import InputPrivacyKeyStatusTimestamp
+        
+        try:
+            settings = await client(functions.account.GetPrivacyRequest(
+                key=InputPrivacyKeyStatusTimestamp()
+            ))
+            return str(settings)
+        except TypeError as e:
+            if "TLObject was expected" in str(e):
+                return "Error: Privacy settings API call failed due to type mismatch. This is likely a version compatibility issue with Telethon."
+            else:
+                raise
     except Exception as e:
+        logger.exception("get_privacy_settings failed")
         return f"Error getting privacy settings: {e}"
 
 
@@ -948,19 +1070,93 @@ async def get_privacy_settings() -> str:
 async def set_privacy_settings(key: str, allow_users: list = None, disallow_users: list = None) -> str:
     """
     Set privacy settings (e.g., last seen, phone, etc.).
-    key: e.g. 'status_timestamp', 'phone_number', 'profile_photo', 'forwards', 'voice_messages', etc.
+    
+    Args:
+        key: The privacy setting to modify ('status' for last seen, 'phone', 'profile_photo', etc.)
+        allow_users: List of user IDs to allow 
+        disallow_users: List of user IDs to disallow
     """
-    from telethon.tl.types import InputPrivacyKeyStatusTimestamp, InputPrivacyValueAllowUsers, InputPrivacyValueDisallowUsers
     try:
-        allow = InputPrivacyValueAllowUsers(users=[await client.get_entity(uid) for uid in (allow_users or [])])
-        disallow = InputPrivacyValueDisallowUsers(users=[await client.get_entity(uid) for uid in (disallow_users or [])])
-        await client(functions.account.SetPrivacyRequest(
-            key=getattr(functions.account, f'InputPrivacyKey{key.title().replace("_", "")}')(),
-            rules=[allow, disallow]
-        ))
-        return f"Privacy settings for {key} updated."
+        # Import needed types
+        from telethon.tl.types import (
+            InputPrivacyKeyStatusTimestamp, 
+            InputPrivacyKeyPhoneNumber,
+            InputPrivacyKeyProfilePhoto,
+            InputPrivacyValueAllowUsers, 
+            InputPrivacyValueDisallowUsers,
+            InputPrivacyValueAllowAll,
+            InputPrivacyValueDisallowAll
+        )
+        
+        # Map the simplified keys to their corresponding input types
+        key_mapping = {
+            'status': InputPrivacyKeyStatusTimestamp,
+            'phone': InputPrivacyKeyPhoneNumber,
+            'profile_photo': InputPrivacyKeyProfilePhoto,
+        }
+        
+        # Get the appropriate key class
+        if key not in key_mapping:
+            return f"Error: Unsupported privacy key '{key}'. Supported keys: {', '.join(key_mapping.keys())}"
+        
+        privacy_key = key_mapping[key]()
+        
+        # Prepare the rules
+        rules = []
+        
+        # Process allow rules
+        if allow_users is None or len(allow_users) == 0:
+            # If no specific users to allow, allow everyone by default
+            rules.append(InputPrivacyValueAllowAll())
+        else:
+            # Convert user IDs to InputUser entities
+            try:
+                allow_entities = []
+                for user_id in allow_users:
+                    try:
+                        user = await client.get_entity(user_id)
+                        allow_entities.append(user)
+                    except Exception as user_err:
+                        logger.warning(f"Could not get entity for user ID {user_id}: {user_err}")
+                
+                if allow_entities:
+                    rules.append(InputPrivacyValueAllowUsers(users=allow_entities))
+            except Exception as allow_err:
+                logger.error(f"Error processing allowed users: {allow_err}")
+                return f"Error processing allowed users: {allow_err}"
+        
+        # Process disallow rules
+        if disallow_users and len(disallow_users) > 0:
+            try:
+                disallow_entities = []
+                for user_id in disallow_users:
+                    try:
+                        user = await client.get_entity(user_id)
+                        disallow_entities.append(user)
+                    except Exception as user_err:
+                        logger.warning(f"Could not get entity for user ID {user_id}: {user_err}")
+                
+                if disallow_entities:
+                    rules.append(InputPrivacyValueDisallowUsers(users=disallow_entities))
+            except Exception as disallow_err:
+                logger.error(f"Error processing disallowed users: {disallow_err}")
+                return f"Error processing disallowed users: {disallow_err}"
+        
+        # Apply the privacy settings
+        try:
+            result = await client(functions.account.SetPrivacyRequest(
+                key=privacy_key,
+                rules=rules
+            ))
+            return f"Privacy settings for {key} updated successfully."
+        except TypeError as type_err:
+            if "TLObject was expected" in str(type_err):
+                return "Error: Privacy settings API call failed due to type mismatch. This is likely a version compatibility issue with Telethon."
+            else:
+                raise
     except Exception as e:
-        return f"Error setting privacy: {e}"
+        logger.exception(f"set_privacy_settings failed (key={key})")
+        return f"Error setting privacy settings: {e}"
 
 
 @mcp.tool()
@@ -1090,87 +1286,203 @@ async def delete_chat_photo(chat_id: int) -> str:
 
 
 @mcp.tool()
-async def promote_admin(chat_id: int, user_id: int) -> str:
+async def promote_admin(group_id: int, user_id: int, rights: dict = None) -> str:
     """
-    Promote a user to admin in a group or channel.
+    Promote a user to admin in a group/channel.
+    
+    Args:
+        group_id: ID of the group/channel
+        user_id: User ID to promote
+        rights: Admin rights to give (optional)
     """
-    from telethon.tl.types import ChatAdminRights
     try:
+        chat = await client.get_entity(group_id)
         user = await client.get_entity(user_id)
-        await client(functions.channels.EditAdminRequest(
-            channel=chat_id,
-            user_id=user,
-            admin_rights=ChatAdminRights(
-                change_info=True, post_messages=True, edit_messages=True, delete_messages=True,
-                ban_users=True, invite_users=True, pin_messages=True, add_admins=True, manage_call=True, other=True
-            ),
-            rank="admin"
-        ))
-        return f"User {user_id} promoted to admin in chat {chat_id}."
+        
+        # Set default admin rights if not provided
+        if not rights:
+            rights = {
+                'change_info': True,
+                'post_messages': True,
+                'edit_messages': True,
+                'delete_messages': True,
+                'ban_users': True,
+                'invite_users': True,
+                'pin_messages': True,
+                'add_admins': False,
+                'anonymous': False,
+                'manage_call': True,
+                'other': True
+            }
+        
+        admin_rights = ChatAdminRights(
+            change_info=rights.get('change_info', True),
+            post_messages=rights.get('post_messages', True),
+            edit_messages=rights.get('edit_messages', True),
+            delete_messages=rights.get('delete_messages', True),
+            ban_users=rights.get('ban_users', True),
+            invite_users=rights.get('invite_users', True),
+            pin_messages=rights.get('pin_messages', True),
+            add_admins=rights.get('add_admins', False),
+            anonymous=rights.get('anonymous', False),
+            manage_call=rights.get('manage_call', True),
+            other=rights.get('other', True)
+        )
+        
+        try:
+            result = await client(functions.channels.EditAdminRequest(
+                channel=chat,
+                user_id=user,
+                admin_rights=admin_rights,
+                rank="Admin"
+            ))
+            return f"Successfully promoted user {user_id} to admin in {chat.title}"
+        except telethon.errors.rpcerrorlist.UserNotMutualContactError:
+            return "Error: Cannot promote users who are not mutual contacts. Please ensure the user is in your contacts and has added you back."
+        except Exception as e:
+            return f"Error promoting user to admin: {e}"
+    
     except Exception as e:
-        return f"Error promoting admin: {e}"
+        logger.error(f"telegram_mcp promote_admin failed (group_id={group_id}, user_id={user_id})", exc_info=True)
+        return f"Error: {str(e)}"
 
 
 @mcp.tool()
-async def demote_admin(chat_id: int, user_id: int) -> str:
+async def demote_admin(group_id: int, user_id: int) -> str:
     """
-    Demote an admin to regular user in a group or channel.
+    Demote a user from admin in a group/channel.
+    
+    Args:
+        group_id: ID of the group/channel
+        user_id: User ID to demote
     """
-    from telethon.tl.types import ChatAdminRights
     try:
+        chat = await client.get_entity(group_id)
         user = await client.get_entity(user_id)
-        await client(functions.channels.EditAdminRequest(
-            channel=chat_id,
-            user_id=user,
-            admin_rights=ChatAdminRights(),
-            rank=""
-        ))
-        return f"User {user_id} demoted in chat {chat_id}."
+        
+        # Create empty admin rights (regular user)
+        admin_rights = ChatAdminRights(
+            change_info=False,
+            post_messages=False,
+            edit_messages=False,
+            delete_messages=False,
+            ban_users=False,
+            invite_users=False,
+            pin_messages=False,
+            add_admins=False,
+            anonymous=False,
+            manage_call=False,
+            other=False
+        )
+        
+        try:
+            result = await client(functions.channels.EditAdminRequest(
+                channel=chat,
+                user_id=user,
+                admin_rights=admin_rights,
+                rank=""
+            ))
+            return f"Successfully demoted user {user_id} from admin in {chat.title}"
+        except telethon.errors.rpcerrorlist.UserNotMutualContactError:
+            return "Error: Cannot modify admin status of users who are not mutual contacts. Please ensure the user is in your contacts and has added you back."
+        except Exception as e:
+            return f"Error demoting admin: {e}"
+            
     except Exception as e:
-        return f"Error demoting admin: {e}"
+        logger.error(f"telegram_mcp demote_admin failed (group_id={group_id}, user_id={user_id})", exc_info=True)
+        return f"Error: {str(e)}"
 
 
 @mcp.tool()
 async def ban_user(chat_id: int, user_id: int) -> str:
     """
     Ban a user from a group or channel.
+    
+    Args:
+        chat_id: ID of the group/channel
+        user_id: User ID to ban
     """
-    from telethon.tl.types import ChatBannedRights
-    import time
     try:
+        chat = await client.get_entity(chat_id)
         user = await client.get_entity(user_id)
-        # Ban for 1 year (31536000 seconds)
-        banned_rights = ChatBannedRights(until_date=int(time.time()) + 31536000, view_messages=True) 
-        await client(functions.channels.EditBannedRequest(
-            channel=chat_id,
-            participant=user,  # Fix: Use 'participant' instead of 'user_id'
-            banned_rights=banned_rights
-        ))
-        return f"User {user_id} banned from chat {chat_id}."
+        
+        # Create banned rights (all restrictions enabled)
+        banned_rights = ChatBannedRights(
+            until_date=None,  # Ban forever
+            view_messages=True,
+            send_messages=True,
+            send_media=True,
+            send_stickers=True,
+            send_gifs=True,
+            send_games=True,
+            send_inline=True,
+            embed_links=True,
+            send_polls=True,
+            change_info=True,
+            invite_users=True,
+            pin_messages=True
+        )
+        
+        try:
+            await client(functions.channels.EditBannedRequest(
+                channel=chat,
+                participant=user,
+                banned_rights=banned_rights
+            ))
+            return f"User {user_id} banned from chat {chat.title} (ID: {chat_id})."
+        except telethon.errors.rpcerrorlist.UserNotMutualContactError:
+            return "Error: Cannot ban users who are not mutual contacts. Please ensure the user is in your contacts and has added you back."
+        except Exception as e:
+            return f"Error banning user: {e}"
     except Exception as e:
         logger.exception(f"ban_user failed (chat_id={chat_id}, user_id={user_id})")
-        return f"Error banning user: {e}"
+        return f"Error: {e}"
 
 
 @mcp.tool()
 async def unban_user(chat_id: int, user_id: int) -> str:
     """
     Unban a user from a group or channel.
+    
+    Args:
+        chat_id: ID of the group/channel
+        user_id: User ID to unban
     """
-    from telethon.tl.types import ChatBannedRights
     try:
+        chat = await client.get_entity(chat_id)
         user = await client.get_entity(user_id)
-        # Fix: Provide until_date=0 for unbanning
-        banned_rights = ChatBannedRights(until_date=0) 
-        await client(functions.channels.EditBannedRequest(
-            channel=chat_id,
-            participant=user,
-            banned_rights=banned_rights
-        ))
-        return f"User {user_id} unbanned in chat {chat_id}."
+        
+        # Create unbanned rights (no restrictions)
+        unbanned_rights = ChatBannedRights(
+            until_date=None,
+            view_messages=False,
+            send_messages=False,
+            send_media=False,
+            send_stickers=False,
+            send_gifs=False,
+            send_games=False,
+            send_inline=False,
+            embed_links=False,
+            send_polls=False,
+            change_info=False,
+            invite_users=False,
+            pin_messages=False
+        )
+        
+        try:
+            await client(functions.channels.EditBannedRequest(
+                channel=chat,
+                participant=user,
+                banned_rights=unbanned_rights
+            ))
+            return f"User {user_id} unbanned from chat {chat.title} (ID: {chat_id})."
+        except telethon.errors.rpcerrorlist.UserNotMutualContactError:
+            return "Error: Cannot modify status of users who are not mutual contacts. Please ensure the user is in your contacts and has added you back."
+        except Exception as e:
+            return f"Error unbanning user: {e}"
     except Exception as e:
         logger.exception(f"unban_user failed (chat_id={chat_id}, user_id={user_id})")
-        return f"Error unbanning user: {e}"
+        return f"Error: {e}"
 
 
 @mcp.tool()
@@ -1211,17 +1523,20 @@ async def get_invite_link(chat_id: int) -> str:
     try:
         entity = await client.get_entity(chat_id)
         
-        if hasattr(functions.messages, 'ExportChatInviteRequest'):
-            try:
-                # Try using the peer parameter instead of chat_id
-                result = await client(functions.messages.ExportChatInviteRequest(
-                    peer=entity
-                ))
-                return result.link
-            except Exception as e1:
-                # If that fails, try alternative approach
-                logger.warning(f"First approach failed: {e1}, trying alternative")
-                
+        # Try using ExportChatInviteRequest first
+        try:
+            from telethon.tl import functions
+            result = await client(functions.messages.ExportChatInviteRequest(
+                peer=entity
+            ))
+            return result.link
+        except AttributeError:
+            # If the function doesn't exist in the current Telethon version
+            logger.warning("ExportChatInviteRequest not available, using alternative method")
+        except Exception as e1:
+            # If that fails, log and try alternative approach
+            logger.warning(f"ExportChatInviteRequest failed: {e1}")
+            
         # Alternative approach using client.export_chat_invite_link
         try:
             invite_link = await client.export_chat_invite_link(entity)
@@ -1230,11 +1545,15 @@ async def get_invite_link(chat_id: int) -> str:
             logger.warning(f"export_chat_invite_link failed: {e2}")
             
         # Last resort: Try directly fetching chat info
-        full_chat = await client(functions.messages.GetFullChatRequest(
-            chat_id=entity.id
-        ))
-        if hasattr(full_chat, 'full_chat') and hasattr(full_chat.full_chat, 'invite_link'):
-            return full_chat.full_chat.invite_link or "No invite link available."
+        try:
+            if isinstance(entity, (Chat, Channel)):
+                full_chat = await client(functions.messages.GetFullChatRequest(
+                    chat_id=entity.id
+                ))
+                if hasattr(full_chat, 'full_chat') and hasattr(full_chat.full_chat, 'invite_link'):
+                    return full_chat.full_chat.invite_link or "No invite link available."
+        except Exception as e3:
+            logger.warning(f"GetFullChatRequest failed: {e3}")
             
         return "Could not retrieve invite link for this chat."
     except Exception as e:
@@ -1306,20 +1625,27 @@ async def export_chat_invite(chat_id: int) -> str:
     try:
         entity = await client.get_entity(chat_id)
         
-        # This is essentially the same as get_invite_link, but kept separate for API consistency
+        # Try using ExportChatInviteRequest first
         try:
-            # Try using the peer parameter instead of chat_id
+            from telethon.tl import functions
             result = await client(functions.messages.ExportChatInviteRequest(
                 peer=entity
             ))
             return result.link
+        except AttributeError:
+            # If the function doesn't exist in the current Telethon version
+            logger.warning("ExportChatInviteRequest not available, using alternative method")
         except Exception as e1:
-            # If that fails, try alternative approach
-            logger.warning(f"ExportChatInviteRequest failed: {e1}, trying alternative")
+            # If that fails, log and try alternative approach
+            logger.warning(f"ExportChatInviteRequest failed: {e1}")
             
-        # Alternative approach
-        invite_link = await client.export_chat_invite_link(entity)
-        return invite_link
+        # Alternative approach using client.export_chat_invite_link
+        try:
+            invite_link = await client.export_chat_invite_link(entity)
+            return invite_link
+        except Exception as e2:
+            logger.warning(f"export_chat_invite_link failed: {e2}")
+            return f"Could not export chat invite: {e2}"
     except Exception as e:
         logger.exception(f"export_chat_invite failed (chat_id={chat_id})")
         return f"Error exporting chat invite: {e}"
