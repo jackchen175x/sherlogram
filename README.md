@@ -41,7 +41,7 @@ This MCP server provides a comprehensive suite of tools for seamless Telegram in
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/l1v0n1/telegram-mcp-server
+git clone https://github.com/chigwell/telegram-mcp-server
 cd telegram-mcp-server
 ```
 
