@@ -543,4 +543,4 @@ This project is licensed under the [Apache 2.0 License](LICENSE).
 
 ---
 
-**Maintained by @chigwell and @l1v0n1. PRs welcome!**
+**Maintained by [@chigwell](https://github.com/chigwell) and [@l1v0n1](https://github.com/l1v0n1). PRs welcome!**
