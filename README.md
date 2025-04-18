@@ -145,7 +145,7 @@ cd telegram-mcp
 ### 2. Create a Virtual Environment
 
 ```bash
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
@@ -153,7 +153,7 @@ pip install -r requirements.txt
 ### 3. Generate a Session String
 
 ```bash
-python session_string_generator.py
+python3 session_string_generator.py
 ```
 Follow the prompts to authenticate and update your `.env` file.
 
@@ -173,36 +173,24 @@ Get your API credentials at [my.telegram.org/apps](https://my.telegram.org/apps)
 
 ## ⚙️ Configuration for Claude & Cursor
 
-### Claude Desktop
-Edit your Claude config (e.g. `~/Library/Application Support/Claude/claude_desktop_config.json`):
+### MCP Configuration
+Edit your Claude desktop config (e.g. `~/Library/Application Support/Claude/claude_desktop_config.json`) or Cursor config (`~/.cursor/mcp.json`):
 
 ```json
 {
   "mcpServers": {
     "telegram-mcp": {
-      "command": "/full/path/to/.venv/bin/python",
-      "args": ["main.py"],
-      "cwd": "/full/path/to/telegram-mcp-server"
+      "command": "uv",
+      "args": [
+        "--directory",
+        "/full/path/to/telegram-mcp-server",
+        "run",
+        "main.py"
+      ]
     }
   }
 }
 ```
-
-### Cursor
-Edit `~/.cursor/mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "telegram-mcp": {
-      "command": "/full/path/to/.venv/bin/python",
-      "args": ["main.py"],
-      "cwd": "/full/path/to/telegram-mcp-server"
-    }
-  }
-}
-```
-
 
 ## 📝 Tool Examples with Code & Output
 
