@@ -544,3 +544,7 @@ This project is licensed under the [Apache 2.0 License](LICENSE).
 ---
 
 **Maintained by [@chigwell](https://github.com/chigwell) and [@l1v0n1](https://github.com/l1v0n1). PRs welcome!**
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=chigwell/telegram-mcp&type=Date)](https://www.star-history.com/#chigwell/telegram-mcp&Date)
