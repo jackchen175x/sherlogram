@@ -1082,7 +1082,9 @@ async def send_file(chat_id: int, file_path: str, caption: str = None) -> str:
         await client.send_file(entity, file_path, caption=caption)
         return f"File sent to chat {chat_id}."
     except Exception as e:
-        return log_and_format_error("send_file", e, chat_id=chat_id, file_path=file_path, caption=caption)
+        return log_and_format_error(
+            "send_file", e, chat_id=chat_id, file_path=file_path, caption=caption
+        )
 
 
 @mcp.tool()
@@ -1100,7 +1102,7 @@ async def download_media(chat_id: int, message_id: int, file_path: str) -> str:
         if not msg or not msg.media:
             return "No media found in the specified message."
         # Check if directory is writable
-        dir_path = os.path.dirname(file_path) or '.'
+        dir_path = os.path.dirname(file_path) or "."
         if not os.access(dir_path, os.W_OK):
             return f"Directory not writable: {dir_path}"
         await client.download_media(msg, file=file_path)
@@ -1108,7 +1110,9 @@ async def download_media(chat_id: int, message_id: int, file_path: str) -> str:
             return f"Download failed: file not created at {file_path}"
         return f"Media downloaded to {file_path}."
     except Exception as e:
-        return log_and_format_error("download_media", e, chat_id=chat_id, message_id=message_id, file_path=file_path)
+        return log_and_format_error(
+            "download_media", e, chat_id=chat_id, message_id=message_id, file_path=file_path
+        )
 
 
 @mcp.tool()
@@ -1135,9 +1139,9 @@ async def set_profile_photo(file_path: str) -> str:
     Set a new profile photo.
     """
     try:
-        await client(functions.photos.UploadProfilePhotoRequest(
-            file=await client.upload_file(file_path)
-        ))
+        await client(
+            functions.photos.UploadProfilePhotoRequest(file=await client.upload_file(file_path))
+        )
         return "Profile photo updated."
     except Exception as e:
         return log_and_format_error("set_profile_photo", e, file_path=file_path)
@@ -1366,24 +1370,26 @@ async def edit_chat_photo(chat_id: int, file_path: str) -> str:
     """
     try:
         if not os.path.isfile(file_path):
-             return f"Photo file not found: {file_path}"
+            return f"Photo file not found: {file_path}"
         if not os.access(file_path, os.R_OK):
-             return f"Photo file not readable: {file_path}"
+            return f"Photo file not readable: {file_path}"
 
         entity = await client.get_entity(chat_id)
         uploaded_file = await client.upload_file(file_path)
 
         if isinstance(entity, Channel):
-             # For channels/supergroups, use EditPhotoRequest with InputChatUploadedPhoto
-             input_photo = InputChatUploadedPhoto(file=uploaded_file)
-             await client(functions.channels.EditPhotoRequest(channel=entity, photo=input_photo))
+            # For channels/supergroups, use EditPhotoRequest with InputChatUploadedPhoto
+            input_photo = InputChatUploadedPhoto(file=uploaded_file)
+            await client(functions.channels.EditPhotoRequest(channel=entity, photo=input_photo))
         elif isinstance(entity, Chat):
-             # For basic groups, use EditChatPhotoRequest with InputChatUploadedPhoto
-             input_photo = InputChatUploadedPhoto(file=uploaded_file)
-             await client(functions.messages.EditChatPhotoRequest(chat_id=chat_id, photo=input_photo))
+            # For basic groups, use EditChatPhotoRequest with InputChatUploadedPhoto
+            input_photo = InputChatUploadedPhoto(file=uploaded_file)
+            await client(
+                functions.messages.EditChatPhotoRequest(chat_id=chat_id, photo=input_photo)
+            )
         else:
-             return f"Cannot edit photo for this entity type ({type(entity)})."
-        
+            return f"Cannot edit photo for this entity type ({type(entity)})."
+
         return f"Chat {chat_id} photo updated."
     except Exception as e:
         logger.exception(f"edit_chat_photo failed (chat_id={chat_id}, file_path='{file_path}')")
@@ -1866,7 +1872,14 @@ async def send_voice(chat_id: int, file_path: str) -> str:
         if not os.access(file_path, os.R_OK):
             return f"File is not readable: {file_path}"
         mime, _ = mimetypes.guess_type(file_path)
-        if not (mime and (mime == 'audio/ogg' or file_path.lower().endswith('.ogg') or file_path.lower().endswith('.opus'))):
+        if not (
+            mime
+            and (
+                mime == "audio/ogg"
+                or file_path.lower().endswith(".ogg")
+                or file_path.lower().endswith(".opus")
+            )
+        ):
             return "Voice file must be .ogg or .opus format."
         entity = await client.get_entity(chat_id)
         await client.send_file(entity, file_path, voice_note=True)
@@ -2167,7 +2180,7 @@ async def send_sticker(chat_id: int, file_path: str) -> str:
             return f"Sticker file not found: {file_path}"
         if not os.access(file_path, os.R_OK):
             return f"Sticker file is not readable: {file_path}"
-        if not file_path.lower().endswith('.webp'):
+        if not file_path.lower().endswith(".webp"):
             return "Sticker file must be a .webp file."
         entity = await client.get_entity(chat_id)
         await client.send_file(entity, file_path, force_document=False)
@@ -2187,25 +2200,40 @@ async def get_gif_search(query: str, limit: int = 10) -> str:
     try:
         # Try approach 1: SearchGifsRequest
         try:
-            result = await client(functions.messages.SearchGifsRequest(q=query, offset_id=0, limit=limit))
+            result = await client(
+                functions.messages.SearchGifsRequest(q=query, offset_id=0, limit=limit)
+            )
             if not result.gifs:
                 return "[]"
-            return json.dumps([g.document.id for g in result.gifs], indent=2, default=json_serializer)
+            return json.dumps(
+                [g.document.id for g in result.gifs], indent=2, default=json_serializer
+            )
         except (AttributeError, ImportError):
             # Fallback approach: Use SearchRequest with GIF filter
             try:
                 from telethon.tl.types import InputMessagesFilterGif
-                result = await client(functions.messages.SearchRequest(
-                    peer="gif", q=query, filter=InputMessagesFilterGif(), 
-                    min_date=None, max_date=None, offset_id=0, add_offset=0, 
-                    limit=limit, max_id=0, min_id=0, hash=0
-                ))
-                if not result or not hasattr(result, 'messages') or not result.messages:
+
+                result = await client(
+                    functions.messages.SearchRequest(
+                        peer="gif",
+                        q=query,
+                        filter=InputMessagesFilterGif(),
+                        min_date=None,
+                        max_date=None,
+                        offset_id=0,
+                        add_offset=0,
+                        limit=limit,
+                        max_id=0,
+                        min_id=0,
+                        hash=0,
+                    )
+                )
+                if not result or not hasattr(result, "messages") or not result.messages:
                     return "[]"
                 # Extract document IDs from any messages with media
                 gif_ids = []
                 for msg in result.messages:
-                    if hasattr(msg, 'media') and msg.media and hasattr(msg.media, 'document'):
+                    if hasattr(msg, "media") and msg.media and hasattr(msg.media, "document"):
                         gif_ids.append(msg.media.document.id)
                 return json.dumps(gif_ids, default=json_serializer)
             except Exception as inner_e:
