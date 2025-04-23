@@ -41,7 +41,6 @@ This MCP server exposes a huge suite of Telegram tools. **Every major Telegram/T
 - **create_group(title, user_ids)**: Create a new group
 - **create_channel(title, about, megagroup)**: Create a channel or supergroup
 - **edit_chat_title(chat_id, title)**: Change chat/group/channel title
-- **edit_chat_photo(chat_id, file_path)**: Set chat/group/channel photo
 - **delete_chat_photo(chat_id)**: Remove chat/group/channel photo
 - **leave_chat(chat_id)**: Leave a group or channel
 - **get_participants(chat_id)**: List all participants
@@ -70,6 +69,7 @@ This MCP server exposes a huge suite of Telegram tools. **Every major Telegram/T
 - **get_message_context(chat_id, message_id, context_size)**: Context around a message
 - **get_history(chat_id, limit)**: Full chat history
 - **get_pinned_messages(chat_id)**: List pinned messages
+- **get_last_interaction(contact_id)**: Most recent message with a contact
 
 ### Contact Management
 - **list_contacts()**: List all contacts
@@ -84,21 +84,15 @@ This MCP server exposes a huge suite of Telegram tools. **Every major Telegram/T
 - **get_contact_ids()**: List all contact IDs
 - **get_direct_chat_by_contact(contact_query)**: Find direct chat with a contact
 - **get_contact_chats(contact_id)**: List all chats with a contact
-- **get_last_interaction(contact_id)**: Most recent message with a contact
 
 ### User & Profile
 - **get_me()**: Get your user info
 - **update_profile(first_name, last_name, about)**: Update your profile
-- **set_profile_photo(file_path)**: Set your profile photo
 - **delete_profile_photo()**: Remove your profile photo
 - **get_user_photos(user_id, limit)**: Get a user's profile photos
 - **get_user_status(user_id)**: Get a user's online status
 
 ### Media
-- **send_file(chat_id, file_path, caption)**: Send a file
-- **send_voice(chat_id, file_path)**: Send a voice message
-- **download_media(chat_id, message_id, file_path)**: Download media
-- **upload_file(file_path)**: Upload a file to Telegram servers
 - **get_media_info(chat_id, message_id)**: Get info about media in a message
 
 ### Search & Discovery
@@ -108,9 +102,6 @@ This MCP server exposes a huge suite of Telegram tools. **Every major Telegram/T
 
 ### Stickers, GIFs, Bots
 - **get_sticker_sets()**: List sticker sets
-- **send_sticker(chat_id, file_path)**: Send a sticker
-- **get_gif_search(query, limit)**: Search for GIFs
-- **send_gif(chat_id, gif_id)**: Send a GIF
 - **get_bot_info(bot_username)**: Get info about a bot
 - **set_bot_commands(bot_username, commands)**: Set bot commands (bot accounts only)
 
@@ -122,6 +113,12 @@ This MCP server exposes a huge suite of Telegram tools. **Every major Telegram/T
 - **archive_chat(chat_id)**: Archive a chat
 - **unarchive_chat(chat_id)**: Unarchive a chat
 - **get_recent_actions(chat_id)**: Get recent admin actions
+
+## Removed Functionality
+
+Please note that tools requiring direct file path access on the server (`send_file`, `download_media`, `set_profile_photo`, `edit_chat_photo`, `send_voice`, `send_sticker`, `upload_file`) have been removed from `main.py`. This is due to limitations in the current MCP environment regarding handling file attachments and local file system paths.
+
+Additionally, GIF-related tools (`get_gif_search`, `get_saved_gifs`, `send_gif`) have been removed due to ongoing issues with reliability in the Telethon library or Telegram API interactions.
 
 ---
 

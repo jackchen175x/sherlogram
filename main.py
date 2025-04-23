@@ -1991,24 +1991,6 @@ async def reply_to_message(chat_id: int, message_id: int, text: str) -> str:
 
 
 @mcp.tool()
-async def upload_file(file_path: str) -> str:
-    """
-    Upload a file to Telegram servers (returns file handle as string, not a file path).
-    Args:
-        file_path: Absolute path to the file to upload (must exist and be readable).
-    """
-    try:
-        if not os.path.isfile(file_path):
-            return f"File not found: {file_path}"
-        if not os.access(file_path, os.R_OK):
-            return f"File is not readable: {file_path}"
-        file = await client.upload_file(file_path)
-        return str(file)
-    except Exception as e:
-        return log_and_format_error("upload_file", e, file_path=file_path)
-
-
-@mcp.tool()
 async def get_media_info(chat_id: int, message_id: int) -> str:
     """
     Get info about media in a message.
