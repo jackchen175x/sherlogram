@@ -32,6 +32,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Create dummy .env file
+        run: |
+          echo "TELEGRAM_API_ID=DUMMY_ID" > .env
+          echo "TELEGRAM_API_HASH=DUMMY_HASH" >> .env
+          echo "TELEGRAM_SESSION_STRING=DUMMY_SESSION" >> .env
+          # Add other required variables with dummy values if needed
+
       - name: Validate Compose file syntax
         run: docker compose config
 
