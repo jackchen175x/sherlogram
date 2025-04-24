@@ -2,6 +2,8 @@
 
 ![MCP Badge](https://badge.mcpx.dev)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-green?style=flat-square)](https://opensource.org/licenses/Apache-2.0)
+[![Python Lint & Format Check](https://github.com/chigwell/telegram-mcp/actions/workflows/python-lint-format.yml/badge.svg)](https://github.com/chigwell/telegram-mcp/actions/workflows/python-lint-format.yml)
+[![Docker Build & Compose Validation](https://github.com/chigwell/telegram-mcp/actions/workflows/docker-build.yml/badge.svg)](https://github.com/chigwell/telegram-mcp/actions/workflows/docker-build.yml)
 
 ---
 
@@ -168,6 +170,51 @@ Get your API credentials at [my.telegram.org/apps](https://my.telegram.org/apps)
 
 ---
 
+## 🐳 Running with Docker
+
+If you have Docker and Docker Compose installed, you can build and run the server in a container, simplifying dependency management.
+
+### 1. Build the Image
+
+From the project root directory, build the Docker image:
+
+```bash
+docker build -t telegram-mcp:latest .
+```
+
+### 2. Running the Container
+
+You have two options:
+
+**Option A: Using Docker Compose (Recommended for Local Use)**
+
+This method uses the `docker-compose.yml` file and automatically reads your credentials from a `.env` file.
+
+1.  **Create `.env` File:** Ensure you have a `.env` file in the project root containing your `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, and `TELEGRAM_SESSION_STRING` (or `TELEGRAM_SESSION_NAME`). Use `.env.example` as a template.
+2.  **Run Compose:**
+    ```bash
+    docker compose up --build
+    ```
+    *   Use `docker compose up -d` to run in detached mode (background).
+    *   Press `Ctrl+C` to stop the server.
+
+**Option B: Using `docker run`**
+
+You can run the container directly, passing credentials as environment variables.
+
+```bash
+docker run -it --rm \
+  -e TELEGRAM_API_ID="YOUR_API_ID" \
+  -e TELEGRAM_API_HASH="YOUR_API_HASH" \
+  -e TELEGRAM_SESSION_STRING="YOUR_SESSION_STRING" \
+  telegram-mcp:latest
+```
+*   Replace placeholders with your actual credentials.
+*   Use `-e TELEGRAM_SESSION_NAME=your_session_file_name` instead of `TELEGRAM_SESSION_STRING` if you prefer file-based sessions (requires volume mounting, see `docker-compose.yml` for an example).
+*   The `-it` flags are crucial for interacting with the server.
+
+---
+
 ## ⚙️ Configuration for Claude & Cursor
 
 ### MCP Configuration
@@ -180,7 +227,7 @@ Edit your Claude desktop config (e.g. `~/Library/Application Support/Claude/clau
       "command": "uv",
       "args": [
         "--directory",
-        "/full/path/to/telegram-mcp-server",
+        "/full/path/to/telegram-mcp",
         "run",
         "main.py"
       ]
