@@ -22,7 +22,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build Docker image
-        run: docker build --file Dockerfile --tag telegram-mcp-server:ci .
+        run: docker build --file Dockerfile --tag telegram-mcp:ci .
 
   docker_compose:
     name: Build & Validate Docker Compose

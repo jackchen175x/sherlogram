@@ -1,7 +1,7 @@
 version: '3.8'
 
 services:
-  telegram-mcp-server:
+  telegram-mcp:
     build:
       context: .
       dockerfile: Dockerfile

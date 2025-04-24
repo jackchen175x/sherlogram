@@ -227,7 +227,7 @@ Edit your Claude desktop config (e.g. `~/Library/Application Support/Claude/clau
       "command": "uv",
       "args": [
         "--directory",
-        "/full/path/to/telegram-mcp-server",
+        "/full/path/to/telegram-mcp",
         "run",
         "main.py"
       ]
