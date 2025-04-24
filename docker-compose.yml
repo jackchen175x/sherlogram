@@ -5,7 +5,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: telegram_mcp_server
+    container_name: telegram-mcp
     # Load environment variables from a .env file in the same directory
     env_file:
       - .env
