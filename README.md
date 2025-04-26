@@ -9,7 +9,7 @@
 
 ## 🤖 MCP in Action
 
-Here's a demonstration of the Telegram MCP capabilities in Claude:
+Here's a demonstration of the Telegram MCP capabilities in [Claude](https://docs.anthropic.com/en/docs/agents-and-tools/mcp):
 
  **Basic usage example:**
 
