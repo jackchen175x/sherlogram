@@ -190,14 +190,14 @@ def get_sender_name(message) -> str:
     """Helper function to get sender name from a message."""
     if not message.sender:
         return "Unknown"
-    
+
     # Check for group/channel title first
-    if hasattr(message.sender, 'title') and message.sender.title:
+    if hasattr(message.sender, "title") and message.sender.title:
         return message.sender.title
-    elif hasattr(message.sender, 'first_name'):
+    elif hasattr(message.sender, "first_name"):
         # User sender
-        first_name = getattr(message.sender, 'first_name', '') or ''
-        last_name = getattr(message.sender, 'last_name', '') or ''
+        first_name = getattr(message.sender, "first_name", "") or ""
+        last_name = getattr(message.sender, "last_name", "") or ""
         full_name = f"{first_name} {last_name}".strip()
         return full_name if full_name else "Unknown"
     else:
@@ -248,7 +248,12 @@ async def get_messages(chat_id: int, page: int = 1, page_size: int = 20) -> str:
         lines = []
         for msg in messages:
             sender_name = get_sender_name(msg)
-            lines.append(f"ID: {msg.id} | {sender_name} | Date: {msg.date} | Message: {msg.message}")
+            reply_info = ""
+            if msg.reply_to and msg.reply_to.reply_to_msg_id:
+                reply_info = f" | reply to {msg.reply_to.reply_to_msg_id}"
+            lines.append(
+                f"ID: {msg.id} | {sender_name} | Date: {msg.date}{reply_info} | Message: {msg.message}"
+            )
         return "\n".join(lines)
     except Exception as e:
         return log_and_format_error(
@@ -420,9 +425,13 @@ async def list_messages(
         lines = []
         for msg in messages:
             sender_name = get_sender_name(msg)
-            message_text = msg.message or '[Media/No text]'
+            message_text = msg.message or "[Media/No text]"
+            reply_info = ""
+            if msg.reply_to and msg.reply_to.reply_to_msg_id:
+                reply_info = f" | reply to {msg.reply_to.reply_to_msg_id}"
+
             lines.append(
-                f"ID: {msg.id} | {sender_name} | Date: {msg.date} | Message: {message_text}"
+                f"ID: {msg.id} | {sender_name} | Date: {msg.date}{reply_info} | Message: {message_text}"
             )
 
         return "\n".join(lines)
@@ -746,8 +755,26 @@ async def get_message_context(chat_id: int, message_id: int, context_size: int =
         for msg in all_messages:
             sender_name = get_sender_name(msg)
             highlight = " [THIS MESSAGE]" if msg.id == message_id else ""
+
+            # Check if this message is a reply and get the replied message
+            reply_content = ""
+            if msg.reply_to and msg.reply_to.reply_to_msg_id:
+                try:
+                    replied_msg = await client.get_messages(chat, ids=msg.reply_to.reply_to_msg_id)
+                    if replied_msg:
+                        replied_sender = "Unknown"
+                        if replied_msg.sender:
+                            replied_sender = getattr(
+                                replied_msg.sender, "first_name", ""
+                            ) or getattr(replied_msg.sender, "title", "Unknown")
+                        reply_content = f" | reply to {msg.reply_to.reply_to_msg_id}\n  → Replied message: [{replied_sender}] {replied_msg.message or '[Media/No text]'}"
+                except Exception:
+                    reply_content = (
+                        f" | reply to {msg.reply_to.reply_to_msg_id} (original message not found)"
+                    )
+
             results.append(
-                f"ID: {msg.id} | {sender_name} | {msg.date}{highlight}\n{msg.message or '[Media/No text]'}\n"
+                f"ID: {msg.id} | {sender_name} | {msg.date}{highlight}{reply_content}\n{msg.message or '[Media/No text]'}\n"
             )
         return "\n".join(results)
     except Exception as e:
@@ -2041,7 +2068,12 @@ async def search_messages(chat_id: int, query: str, limit: int = 20) -> str:
         lines = []
         for msg in messages:
             sender_name = get_sender_name(msg)
-            lines.append(f"ID: {msg.id} | {sender_name} | Date: {msg.date} | Message: {msg.message}")
+            reply_info = ""
+            if msg.reply_to and msg.reply_to.reply_to_msg_id:
+                reply_info = f" | reply to {msg.reply_to.reply_to_msg_id}"
+            lines.append(
+                f"ID: {msg.id} | {sender_name} | Date: {msg.date}{reply_info} | Message: {msg.message}"
+            )
         return "\n".join(lines)
     except Exception as e:
         return log_and_format_error(
@@ -2371,7 +2403,12 @@ async def get_history(chat_id: int, limit: int = 100) -> str:
         lines = []
         for msg in messages:
             sender_name = get_sender_name(msg)
-            lines.append(f"ID: {msg.id} | {sender_name} | Date: {msg.date} | Message: {msg.message}")
+            reply_info = ""
+            if msg.reply_to and msg.reply_to.reply_to_msg_id:
+                reply_info = f" | reply to {msg.reply_to.reply_to_msg_id}"
+            lines.append(
+                f"ID: {msg.id} | {sender_name} | Date: {msg.date}{reply_info} | Message: {msg.message}"
+            )
         return "\n".join(lines)
     except Exception as e:
         return log_and_format_error("get_history", e, chat_id=chat_id, limit=limit)
@@ -2450,8 +2487,13 @@ async def get_pinned_messages(chat_id: int) -> str:
         lines = []
         for msg in messages:
             sender_name = get_sender_name(msg)
-            lines.append(f"ID: {msg.id} | {sender_name} | Date: {msg.date} | Message: {msg.message or '[Media/No text]'}")
-        
+            reply_info = ""
+            if msg.reply_to and msg.reply_to.reply_to_msg_id:
+                reply_info = f" | reply to {msg.reply_to.reply_to_msg_id}"
+            lines.append(
+                f"ID: {msg.id} | {sender_name} | Date: {msg.date}{reply_info} | Message: {msg.message or '[Media/No text]'}"
+            )
+
         return "\n".join(lines)
     except Exception as e:
         logger.exception(f"get_pinned_messages failed (chat_id={chat_id})")
