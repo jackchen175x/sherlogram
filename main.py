@@ -229,7 +229,10 @@ async def get_messages(chat_id: int, page: int = 1, page_size: int = 20) -> str:
             return "No messages found for this page."
         lines = []
         for msg in messages:
-            lines.append(f"ID: {msg.id} | Date: {msg.date} | Message: {msg.message}")
+            reply_info = ""
+            if msg.reply_to and msg.reply_to.reply_to_msg_id:
+                reply_info = f" | reply to {msg.reply_to.reply_to_msg_id}"
+            lines.append(f"ID: {msg.id} | Date: {msg.date}{reply_info} | Message: {msg.message}")
         return "\n".join(lines)
     except Exception as e:
         return log_and_format_error(
@@ -407,8 +410,12 @@ async def list_messages(
                 )
                 sender = f"{sender_name} | "
 
+            reply_info = ""
+            if msg.reply_to and msg.reply_to.reply_to_msg_id:
+                reply_info = f" | reply to {msg.reply_to.reply_to_msg_id}"
+            
             lines.append(
-                f"ID: {msg.id} | {sender}Date: {msg.date} | Message: {msg.message or '[Media/No text]'}"
+                f"ID: {msg.id} | {sender}Date: {msg.date}{reply_info} | Message: {msg.message or '[Media/No text]'}"
             )
 
         return "\n".join(lines)
@@ -736,8 +743,24 @@ async def get_message_context(chat_id: int, message_id: int, context_size: int =
                     msg.sender, "title", "Unknown"
                 )
             highlight = " [THIS MESSAGE]" if msg.id == message_id else ""
+            
+            # Check if this message is a reply and get the replied message
+            reply_content = ""
+            if msg.reply_to and msg.reply_to.reply_to_msg_id:
+                try:
+                    replied_msg = await client.get_messages(chat, ids=msg.reply_to.reply_to_msg_id)
+                    if replied_msg:
+                        replied_sender = "Unknown"
+                        if replied_msg.sender:
+                            replied_sender = getattr(replied_msg.sender, "first_name", "") or getattr(
+                                replied_msg.sender, "title", "Unknown"
+                            )
+                        reply_content = f" | reply to {msg.reply_to.reply_to_msg_id}\n  → Replied message: [{replied_sender}] {replied_msg.message or '[Media/No text]'}"
+                except Exception:
+                    reply_content = f" | reply to {msg.reply_to.reply_to_msg_id} (original message not found)"
+            
             results.append(
-                f"ID: {msg.id} | {sender_name} | {msg.date}{highlight}\n{msg.message or '[Media/No text]'}\n"
+                f"ID: {msg.id} | {sender_name} | {msg.date}{highlight}{reply_content}\n{msg.message or '[Media/No text]'}\n"
             )
         return "\n".join(results)
     except Exception as e:
@@ -2028,7 +2051,13 @@ async def search_messages(chat_id: int, query: str, limit: int = 20) -> str:
     try:
         entity = await client.get_entity(chat_id)
         messages = await client.get_messages(entity, limit=limit, search=query)
-        return "\n".join([f"ID: {m.id} | {m.date} | {m.message}" for m in messages])
+        lines = []
+        for m in messages:
+            reply_info = ""
+            if m.reply_to and m.reply_to.reply_to_msg_id:
+                reply_info = f" | reply to {m.reply_to.reply_to_msg_id}"
+            lines.append(f"ID: {m.id} | {m.date}{reply_info} | {m.message}")
+        return "\n".join(lines)
     except Exception as e:
         return log_and_format_error(
             "search_messages", e, chat_id=chat_id, query=query, limit=limit
@@ -2354,7 +2383,13 @@ async def get_history(chat_id: int, limit: int = 100) -> str:
     try:
         entity = await client.get_entity(chat_id)
         messages = await client.get_messages(entity, limit=limit)
-        return "\n".join([f"ID: {m.id} | {m.date} | {m.message}" for m in messages])
+        lines = []
+        for m in messages:
+            reply_info = ""
+            if m.reply_to and m.reply_to.reply_to_msg_id:
+                reply_info = f" | reply to {m.reply_to.reply_to_msg_id}"
+            lines.append(f"ID: {m.id} | {m.date}{reply_info} | {m.message}")
+        return "\n".join(lines)
     except Exception as e:
         return log_and_format_error("get_history", e, chat_id=chat_id, limit=limit)
 
@@ -2429,9 +2464,13 @@ async def get_pinned_messages(chat_id: int) -> str:
         if not messages:
             return "No pinned messages found in this chat."
 
-        return "\n".join(
-            [f"ID: {m.id} | {m.date} | {m.message or '[Media/No text]'}" for m in messages]
-        )
+        lines = []
+        for m in messages:
+            reply_info = ""
+            if m.reply_to and m.reply_to.reply_to_msg_id:
+                reply_info = f" | reply to {m.reply_to.reply_to_msg_id}"
+            lines.append(f"ID: {m.id} | {m.date}{reply_info} | {m.message or '[Media/No text]'}")
+        return "\n".join(lines)
     except Exception as e:
         logger.exception(f"get_pinned_messages failed (chat_id={chat_id})")
         return log_and_format_error("get_pinned_messages", e, chat_id=chat_id)
