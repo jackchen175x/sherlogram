@@ -141,18 +141,16 @@ git clone https://github.com/chigwell/telegram-mcp.git
 cd telegram-mcp
 ```
 
-### 2. Create a Virtual Environment
+### 2. Install Dependencies with uv
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+uv sync
 ```
 
 ### 3. Generate a Session String
 
 ```bash
-python3 session_string_generator.py
+uv run session_string_generator.py
 ```
 Follow the prompts to authenticate and update your `.env` file.
 
