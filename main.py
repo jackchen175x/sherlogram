@@ -7,6 +7,7 @@ import sqlite3
 import logging
 import mimetypes
 from datetime import datetime, timedelta
+from enum import Enum
 from typing import List, Dict, Optional, Union, Any
 
 # Third-party libraries
@@ -96,44 +97,51 @@ except Exception as log_error:
     logger.error(f"Failed to set up log file handler: {log_error}")
 
 # Error code prefix mapping for better error tracing
-ERROR_PREFIXES = {
-    "chat": "CHAT",
-    "msg": "MSG",
-    "contact": "CONTACT",
-    "group": "GROUP",
-    "media": "MEDIA",
-    "profile": "PROFILE",
-    "auth": "AUTH",
-    "admin": "ADMIN",
-}
+
+
+class ErrorCategory(str, Enum):
+    CHAT = "CHAT"
+    MSG = "MSG"
+    CONTACT = "CONTACT"
+    GROUP = "GROUP"
+    MEDIA = "MEDIA"
+    PROFILE = "PROFILE"
+    AUTH = "AUTH"
+    ADMIN = "ADMIN"
 
 
 def log_and_format_error(
-    function_name: str, error: Exception, prefix: str = None, **kwargs
+    function_name: str,
+    error: Exception,
+    prefix: Optional[ErrorCategory] = None,
+    **kwargs,
 ) -> str:
     """
-    Centralized error handling function that logs the error and returns a formatted user-friendly message.
+    Centralized error handling function.
+
+    Logs an error and returns a formatted, user-friendly message.
 
     Args:
-        function_name: Name of the function where error occurred
-        error: The exception that was raised
-        prefix: Error code prefix (e.g., "CHAT", "MSG") - if None, will be derived from function_name
-        **kwargs: Additional context parameters to include in log
+        function_name: Name of the function where the error occurred.
+        error: The exception that was raised.
+        prefix: Error code prefix (e.g., "CHAT", "MSG").
+            If None, it will be derived from the function_name.
+        **kwargs: Additional context parameters to include in the log.
 
     Returns:
-        A user-friendly error message with error code
+        A user-friendly error message with an error code.
     """
     # Generate a consistent error code
     if prefix is None:
         # Try to derive prefix from function name
-        for key, value in ERROR_PREFIXES.items():
-            if key in function_name.lower():
-                prefix = value
+        for category in ErrorCategory:
+            if category.name.lower() in function_name.lower():
+                prefix = category
                 break
-        if prefix is None:
-            prefix = "GEN"  # Generic prefix if none matches
 
-    error_code = f"{prefix}-ERR-{abs(hash(function_name)) % 1000:03d}"
+    prefix_str = prefix.value if prefix else "GEN"
+
+    error_code = f"{prefix_str}-ERR-{abs(hash(function_name)) % 1000:03d}"
 
     # Format the additional context parameters
     context = ", ".join(f"{k}={v}" for k, v in kwargs.items())
@@ -142,7 +150,7 @@ def log_and_format_error(
     logger.exception(f"{function_name} failed ({context}): {error}")
 
     # Return a user-friendly message
-    return f"An error occurred (code: {error_code}). Check mcp_errors.log for details."
+    return f"An error occurred (code: {error_code}). " f"Check mcp_errors.log for details."
 
 
 def format_entity(entity) -> Dict[str, Any]:
