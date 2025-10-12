@@ -412,20 +412,47 @@ async def list_messages(
         # Prepare filter parameters
         params = {}
         if search_query:
+            # IMPORTANT: Do not combine offset_date with search.
+            # Use server-side search alone, then enforce date bounds client-side.
             params["search"] = search_query
-
-        messages = await client.get_messages(entity, limit=limit, **params)
-
-        # Apply date filters (Telethon doesn't support date filtering in get_messages directly)
-        if from_date_obj or to_date_obj:
-            filtered_messages = []
-            for msg in messages:
-                if from_date_obj and msg.date < from_date_obj:
-                    continue
+            messages = []
+            async for msg in client.iter_messages(entity, **params):  # newest -> oldest
                 if to_date_obj and msg.date > to_date_obj:
                     continue
-                filtered_messages.append(msg)
-            messages = filtered_messages
+                if from_date_obj and msg.date < from_date_obj:
+                    break
+                messages.append(msg)
+                if len(messages) >= limit:
+                    break
+
+        else:
+            # Use server-side iteration when only date bounds are present
+            # (no search) to avoid over-fetching.
+            if from_date_obj or to_date_obj:
+                messages = []
+                if from_date_obj:
+                    # Walk forward from start date (oldest -> newest)
+                    async for msg in client.iter_messages(
+                        entity, offset_date=from_date_obj, reverse=True
+                    ):
+                        if to_date_obj and msg.date > to_date_obj:
+                            break
+                        if msg.date < from_date_obj:
+                            continue
+                        messages.append(msg)
+                        if len(messages) >= limit:
+                            break
+                else:
+                    # Only upper bound: walk backward from end bound
+                    async for msg in client.iter_messages(
+                        # offset_date is exclusive; +1µs makes to_date inclusive
+                        entity, offset_date=to_date_obj + timedelta(microseconds=1)
+                    ):
+                        messages.append(msg)
+                        if len(messages) >= limit:
+                            break
+            else:
+                messages = await client.get_messages(entity, limit=limit, **params)
 
         if not messages:
             return "No messages found matching the criteria."
