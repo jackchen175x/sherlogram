@@ -446,7 +446,8 @@ async def list_messages(
                     # Only upper bound: walk backward from end bound
                     async for msg in client.iter_messages(
                         # offset_date is exclusive; +1µs makes to_date inclusive
-                        entity, offset_date=to_date_obj + timedelta(microseconds=1)
+                        entity,
+                        offset_date=to_date_obj + timedelta(microseconds=1),
                     ):
                         messages.append(msg)
                         if len(messages) >= limit:
