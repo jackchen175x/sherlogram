@@ -73,6 +73,7 @@ This MCP server exposes a huge suite of Telegram tools. **Every major Telegram/T
 - **get_history(chat_id, limit)**: Full chat history
 - **get_pinned_messages(chat_id)**: List pinned messages
 - **get_last_interaction(contact_id)**: Most recent message with a contact
+- **create_poll(chat_id, question, options, multiple_choice, quiz_mode, public_votes, close_date)**: Create a poll
 
 ### Contact Management
 - **list_contacts()**: List all contacts
