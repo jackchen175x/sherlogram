@@ -60,6 +60,7 @@ This MCP server exposes a huge suite of Telegram tools. **Every major Telegram/T
 ### Messaging
 - **get_messages(chat_id, page, page_size)**: Paginated messages
 - **list_messages(chat_id, limit, search_query, from_date, to_date)**: Filtered messages
+- **list_topics(chat_id, limit, offset_topic, search_query)**: List forum topics in supergroups
 - **send_message(chat_id, message)**: Send a message
 - **reply_to_message(chat_id, message_id, text)**: Reply to a message
 - **edit_message(chat_id, message_id, new_text)**: Edit your message

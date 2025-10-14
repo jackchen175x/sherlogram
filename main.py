@@ -476,6 +476,93 @@ async def list_messages(
 
 
 @mcp.tool()
+async def list_topics(
+    chat_id: int,
+    limit: int = 200,
+    offset_topic: int = 0,
+    search_query: str = None,
+) -> str:
+    """
+    Retrieve forum topics from a supergroup with the forum feature enabled.
+
+    Note for LLM: You can send a message to a selected topic via reply_to_message tool
+    by using Topic ID as the message_id parameter.
+
+    Args:
+        chat_id: The ID of the forum-enabled chat (supergroup).
+        limit: Maximum number of topics to retrieve.
+        offset_topic: Topic ID offset for pagination.
+        search_query: Optional query to filter topics by title.
+    """
+    try:
+        entity = await client.get_entity(chat_id)
+
+        if not isinstance(entity, Channel) or not getattr(entity, "megagroup", False):
+            return "The specified chat is not a supergroup."
+
+        if not getattr(entity, "forum", False):
+            return "The specified supergroup does not have forum topics enabled."
+
+        result = await client(
+            functions.channels.GetForumTopicsRequest(
+                channel=entity,
+                offset_date=0,
+                offset_id=0,
+                offset_topic=offset_topic,
+                limit=limit,
+                q=search_query or None,
+            )
+        )
+
+        topics = getattr(result, "topics", None) or []
+        if not topics:
+            return "No topics found for this chat."
+
+        messages_map = {}
+        if getattr(result, "messages", None):
+            messages_map = {message.id: message for message in result.messages}
+
+        lines = []
+        for topic in topics:
+            line_parts = [f"Topic ID: {topic.id}"]
+
+            title = getattr(topic, "title", None) or "(no title)"
+            line_parts.append(f"Title: {title}")
+
+            total_messages = getattr(topic, "total_messages", None)
+            if total_messages is not None:
+                line_parts.append(f"Messages: {total_messages}")
+
+            unread_count = getattr(topic, "unread_count", None)
+            if unread_count:
+                line_parts.append(f"Unread: {unread_count}")
+
+            if getattr(topic, "closed", False):
+                line_parts.append("Closed: Yes")
+
+            if getattr(topic, "hidden", False):
+                line_parts.append("Hidden: Yes")
+
+            top_message_id = getattr(topic, "top_message", None)
+            top_message = messages_map.get(top_message_id)
+            if top_message and getattr(top_message, "date", None):
+                line_parts.append(f"Last Activity: {top_message.date.isoformat()}")
+
+            lines.append(" | ".join(line_parts))
+
+        return "\n".join(lines)
+    except Exception as e:
+        return log_and_format_error(
+            "list_topics",
+            e,
+            chat_id=chat_id,
+            limit=limit,
+            offset_topic=offset_topic,
+            search_query=search_query,
+        )
+
+
+@mcp.tool()
 async def list_chats(chat_type: str = None, limit: int = 20) -> str:
     """
     List available chats with metadata.
