@@ -60,6 +60,7 @@ This MCP server exposes a huge suite of Telegram tools. **Every major Telegram/T
 ### Messaging
 - **get_messages(chat_id, page, page_size)**: Paginated messages
 - **list_messages(chat_id, limit, search_query, from_date, to_date)**: Filtered messages
+- **list_topics(chat_id, limit, offset_topic, search_query)**: List forum topics in supergroups
 - **send_message(chat_id, message)**: Send a message
 - **reply_to_message(chat_id, message_id, text)**: Reply to a message
 - **edit_message(chat_id, message_id, new_text)**: Edit your message
@@ -72,6 +73,7 @@ This MCP server exposes a huge suite of Telegram tools. **Every major Telegram/T
 - **get_history(chat_id, limit)**: Full chat history
 - **get_pinned_messages(chat_id)**: List pinned messages
 - **get_last_interaction(contact_id)**: Most recent message with a contact
+- **create_poll(chat_id, question, options, multiple_choice, quiz_mode, public_votes, close_date)**: Create a poll
 
 ### Contact Management
 - **list_contacts()**: List all contacts
@@ -151,18 +153,16 @@ git clone https://github.com/chigwell/telegram-mcp.git
 cd telegram-mcp
 ```
 
-### 2. Create a Virtual Environment
+### 2. Install Dependencies with uv
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+uv sync
 ```
 
 ### 3. Generate a Session String
 
 ```bash
-python3 session_string_generator.py
+uv run session_string_generator.py
 ```
 Follow the prompts to authenticate and update your `.env` file.
 
