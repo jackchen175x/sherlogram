@@ -14,6 +14,7 @@ from typing import List, Dict, Optional, Union, Any
 import nest_asyncio
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
+from pythonjsonlogger import jsonlogger
 from telethon import TelegramClient, functions, utils
 from telethon.sessions import StringSession
 from telethon.tl.types import (
@@ -86,12 +87,17 @@ try:
     file_handler = logging.FileHandler(log_file_path, mode="a")  # Append mode
     file_handler.setLevel(logging.ERROR)
 
-    # Create formatter and add to handlers
-    formatter = logging.Formatter(
-        "%(asctime)s [%(levelname)s] %(name)s - %(message)s - %(filename)s:%(lineno)d"
+    # Create formatters
+    # Console formatter remains in the old format
+    console_formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s - %(message)s")
+    console_handler.setFormatter(console_formatter)
+
+    # File formatter is now JSON
+    json_formatter = jsonlogger.JsonFormatter(
+        "%(asctime)s %(name)s %(levelname)s %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S%z",
     )
-    console_handler.setFormatter(formatter)
-    file_handler.setFormatter(formatter)
+    file_handler.setFormatter(json_formatter)
 
     # Add handlers to logger
     logger.addHandler(console_handler)
