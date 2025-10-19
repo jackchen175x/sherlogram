@@ -81,9 +81,7 @@ try:
 
     # Create formatters
     # Console formatter remains in the old format
-    console_formatter = logging.Formatter(
-        "%(asctime)s [%(levelname)s] %(name)s - %(message)s"
-    )
+    console_formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s - %(message)s")
     console_handler.setFormatter(console_formatter)
 
     # File formatter is now JSON
