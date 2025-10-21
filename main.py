@@ -2471,7 +2471,7 @@ async def unarchive_chat(chat_id: Union[int, str]) -> str:
     try:
         await client(
             functions.messages.ToggleDialogPinRequest(
-                peer=await client.get_entity(_id), pinned=False
+                peer=await client.get_entity(chat_id), pinned=False
             )
         )
         return f"Chat {chat_id} unarchived."
