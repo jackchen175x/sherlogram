@@ -383,21 +383,50 @@ def format_message(message) -> Dict[str, Any]:
 
 
 def get_sender_name(message) -> str:
-    """Helper function to get sender name from a message."""
+    """Helper function to get sender name from a message, including @username when available."""
     if not message.sender:
         return "Unknown"
 
     # Check for group/channel title first
     if hasattr(message.sender, "title") and message.sender.title:
+        username = getattr(message.sender, "username", None)
+        if username:
+            return f"{message.sender.title} (@{username})"
         return message.sender.title
     elif hasattr(message.sender, "first_name"):
         # User sender
         first_name = getattr(message.sender, "first_name", "") or ""
         last_name = getattr(message.sender, "last_name", "") or ""
         full_name = f"{first_name} {last_name}".strip()
+        username = getattr(message.sender, "username", None)
+        if username:
+            return f"{full_name or 'Unknown'} (@{username})"
         return full_name if full_name else "Unknown"
     else:
         return "Unknown"
+
+
+def get_forward_info(message) -> str:
+    """Helper function to extract forwarded-from information from a message."""
+    fwd = getattr(message, "fwd_from", None)
+    if not fwd:
+        return ""
+
+    parts = []
+    # Original sender info
+    if fwd.from_id:
+        peer_id = utils.get_peer_id(fwd.from_id)
+        parts.append(f"fwd_from_id:{peer_id}")
+    if getattr(fwd, "from_name", None):
+        parts.append(f"fwd_from_name:{fwd.from_name}")
+    # Original channel post info
+    if getattr(fwd, "channel_post", None):
+        parts.append(f"fwd_channel_post:{fwd.channel_post}")
+    # Post author (signature in channel)
+    if getattr(fwd, "post_author", None):
+        parts.append(f"fwd_author:{fwd.post_author}")
+
+    return f" | forwarded=[{', '.join(parts)}]" if parts else ""
 
 
 def get_engagement_info(message) -> str:
@@ -735,10 +764,11 @@ async def get_messages(chat_id: Union[int, str], page: int = 1, page_size: int =
                 reply_info = f" | reply to {msg.reply_to.reply_to_msg_id}"
 
             engagement_info = get_engagement_info(msg)
+            forward_info = get_forward_info(msg)
             safe_text = (msg.message or "").replace("\n", "\\n")
 
             lines.append(
-                f"ID: {msg.id} | {sender_name} | Date: {msg.date}{reply_info}{engagement_info} | Message: {safe_text}"
+                f"ID: {msg.id} | {sender_name} | Date: {msg.date}{reply_info}{forward_info}{engagement_info} | Message: {safe_text}"
             )
         return "\n".join(lines)
     except Exception as e:
@@ -1207,9 +1237,10 @@ async def list_messages(
                 reply_info = f" | reply to {msg.reply_to.reply_to_msg_id}"
 
             engagement_info = get_engagement_info(msg)
+            forward_info = get_forward_info(msg)
 
             lines.append(
-                f"ID: {msg.id} | {sender_name} | Date: {msg.date}{reply_info}{engagement_info} | Message: {message_text}"
+                f"ID: {msg.id} | {sender_name} | Date: {msg.date}{reply_info}{forward_info}{engagement_info} | Message: {message_text}"
             )
 
         return "\n".join(lines)
@@ -3324,8 +3355,9 @@ async def search_messages(chat_id: Union[int, str], query: str, limit: int = 20)
             reply_info = ""
             if msg.reply_to and msg.reply_to.reply_to_msg_id:
                 reply_info = f" | reply to {msg.reply_to.reply_to_msg_id}"
+            forward_info = get_forward_info(msg)
             lines.append(
-                f"ID: {msg.id} | {sender_name} | Date: {msg.date}{reply_info} | Message: {msg.message}"
+                f"ID: {msg.id} | {sender_name} | Date: {msg.date}{reply_info}{forward_info} | Message: {msg.message}"
             )
         return "\n".join(lines)
     except Exception as e:
@@ -3360,10 +3392,13 @@ async def search_global(query: str, page: int = 1, page_size: int = 20) -> str:
             chat_name = (
                 getattr(chat, "title", None) or getattr(chat, "first_name", "") or str(msg.chat_id)
             )
+            chat_username = getattr(chat, "username", None)
+            chat_label = f"{chat_name} (@{chat_username})" if chat_username else chat_name
             sender_name = get_sender_name(msg)
+            forward_info = get_forward_info(msg)
             lines.append(
-                f"Chat: {chat_name} | ID: {msg.id} | {sender_name} | "
-                f"Date: {msg.date} | Message: {msg.message}"
+                f"Chat: {chat_label} | ID: {msg.id} | {sender_name} | "
+                f"Date: {msg.date}{forward_info} | Message: {msg.message}"
             )
 
         return "\n".join(lines)
@@ -3828,6 +3863,98 @@ async def get_user_status(user_id: Union[int, str]) -> str:
         return str(user.status)
     except Exception as e:
         return log_and_format_error("get_user_status", e, user_id=user_id)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Get User Full Info",
+        openWorldHint=True,
+        readOnlyHint=True,
+    )
+)
+@validate_id("user_id")
+async def get_user_full_info(user_id: Union[int, str]) -> str:
+    """
+    Get full profile info of any user (not just bots), including bio, username,
+    common chats count, and other details useful for investigation/research.
+
+    Args:
+        user_id: The ID or username of the user (e.g., 123456789 or "@username").
+    """
+    try:
+        entity = await resolve_entity(user_id)
+
+        info = {
+            "id": entity.id,
+            "first_name": getattr(entity, "first_name", "") or "",
+            "last_name": getattr(entity, "last_name", "") or "",
+            "username": getattr(entity, "username", None),
+            "phone": getattr(entity, "phone", None),
+            "is_bot": getattr(entity, "bot", False),
+            "verified": getattr(entity, "verified", False),
+            "restricted": getattr(entity, "restricted", False),
+            "scam": getattr(entity, "scam", False),
+            "fake": getattr(entity, "fake", False),
+            "premium": getattr(entity, "premium", False),
+        }
+
+        # Get full user info (bio, common chats, etc.)
+        try:
+            full = await client(functions.users.GetFullUserRequest(id=entity))
+            if hasattr(full, "full_user"):
+                fu = full.full_user
+                info["bio"] = getattr(fu, "about", None) or ""
+                info["common_chats_count"] = getattr(fu, "common_chats_count", 0)
+                info["blocked"] = getattr(fu, "blocked", False)
+                info["phone_calls_available"] = getattr(fu, "phone_calls_available", False)
+                info["video_calls_available"] = getattr(fu, "video_calls_available", False)
+                # Bot-specific info
+                if getattr(fu, "bot_info", None):
+                    info["bot_description"] = getattr(fu.bot_info, "description", "")
+        except Exception as full_err:
+            info["_full_info_error"] = str(full_err)
+
+        return json.dumps(info, indent=2, default=json_serializer)
+    except Exception as e:
+        return log_and_format_error("get_user_full_info", e, user_id=user_id)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Get Common Chats",
+        openWorldHint=True,
+        readOnlyHint=True,
+    )
+)
+@validate_id("user_id")
+async def get_common_chats(user_id: Union[int, str]) -> str:
+    """
+    Get the list of groups/channels that you and a specific user have in common.
+    Useful for discovering what communities a user participates in.
+
+    Args:
+        user_id: The ID or username of the user.
+    """
+    try:
+        entity = await resolve_entity(user_id)
+        result = await client(
+            functions.messages.GetCommonChatsRequest(user_id=entity, max_id=0, limit=100)
+        )
+        if not result.chats:
+            return "No common chats found with this user."
+
+        lines = []
+        for chat in result.chats:
+            chat_type = get_entity_type(chat)
+            username = getattr(chat, "username", None)
+            username_str = f" (@{username})" if username else ""
+            participants = getattr(chat, "participants_count", "?")
+            lines.append(
+                f"ID: {chat.id} | {chat.title}{username_str} | Type: {chat_type} | Members: {participants}"
+            )
+        return "\n".join(lines)
+    except Exception as e:
+        return log_and_format_error("get_common_chats", e, user_id=user_id)
 
 
 @mcp.tool(
