@@ -107,11 +107,12 @@ else:
 
 # Setup robust logging with both file and console output
 logger = logging.getLogger("telegram_mcp")
-logger.setLevel(logging.ERROR)  # Set to ERROR for production, INFO for debugging
+_log_level = getattr(logging, os.getenv("LOG_LEVEL", "ERROR").upper(), logging.ERROR)
+logger.setLevel(_log_level)
 
 # Create console handler
 console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.ERROR)  # Set to ERROR for production, INFO for debugging
+console_handler.setLevel(_log_level)
 
 # Create file handler with absolute path
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -341,6 +342,30 @@ def format_entity(entity) -> Dict[str, Any]:
     return result
 
 
+async def ensure_connected(max_retries: int = 3, delay: float = 2.0):
+    """确保 Telegram client 已连接，断连时自动重连"""
+    if client.is_connected():
+        return
+    for attempt in range(max_retries):
+        try:
+            logger.warning(f"Client disconnected, reconnecting (attempt {attempt+1}/{max_retries})...")
+            await client.connect()
+            if client.is_connected():
+                logger.info("Reconnected successfully")
+                return
+        except Exception as e:
+            logger.error(f"Reconnect attempt {attempt+1} failed: {e}")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(delay * (attempt + 1))
+    raise ConnectionError("Failed to reconnect to Telegram after all retries")
+
+
+async def safe_call(coro, timeout: float = 30.0):
+    """执行 Telegram API 调用，带连接检查和超时保护"""
+    await ensure_connected()
+    return await asyncio.wait_for(coro, timeout=timeout)
+
+
 async def resolve_entity(identifier: Union[int, str]) -> Any:
     """Resolve entity with automatic cache warming on miss.
 
@@ -348,6 +373,7 @@ async def resolve_entity(identifier: Union[int, str]) -> Any:
     because the cache is cold (ValueError on PeerUser lookup for group IDs),
     warm the cache via get_dialogs() and retry.
     """
+    await ensure_connected()
     try:
         return await client.get_entity(identifier)
     except ValueError:
@@ -357,6 +383,7 @@ async def resolve_entity(identifier: Union[int, str]) -> Any:
 
 async def resolve_input_entity(identifier: Union[int, str]) -> Any:
     """Like resolve_entity() but returns an InputPeer."""
+    await ensure_connected()
     try:
         return await client.get_input_entity(identifier)
     except ValueError:
@@ -692,7 +719,7 @@ async def _resolve_writable_file_path(
 
 def _configure_allowed_roots_from_cli(argv: Optional[List[str]] = None) -> None:
     parser = argparse.ArgumentParser(
-        prog="telegram-mcp",
+        prog="tg-mcp",
         add_help=False,
         description=(
             "Optional positional arguments define server-side allowed roots "
@@ -4958,19 +4985,37 @@ async def reorder_folders(folder_ids: List[int]) -> str:
         )
 
 
+async def _heartbeat(interval: int = 120):
+    """后台心跳：定期检查连接，断连时自动恢复"""
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            if not client.is_connected():
+                logger.warning("Heartbeat: client disconnected, reconnecting...")
+                await client.connect()
+                logger.info("Heartbeat: reconnected")
+        except Exception as e:
+            logger.error(f"Heartbeat reconnect failed: {e}")
+
+
 async def _main() -> None:
+    heartbeat_task = None
     try:
-        # Start the Telethon client non-interactively
         print("Starting Telegram client...", file=sys.stderr)
         await client.start()
 
-        # Warm entity cache — StringSession has no persistent cache,
-        # so fetch all dialogs once to populate it
-        print("Warming entity cache...")
+        # 验证连接有效
+        me = await client.get_me()
+        print(f"Logged in as: {me.first_name} (@{me.username or 'N/A'})", file=sys.stderr)
+
+        # Warm entity cache
+        print("Warming entity cache...", file=sys.stderr)
         await client.get_dialogs()
 
-        print("Telegram client started. Running MCP server...")
-        # Use the asynchronous entrypoint instead of mcp.run()
+        # 启动后台心跳
+        heartbeat_task = asyncio.create_task(_heartbeat())
+
+        print("Telegram client started. Running MCP server...", file=sys.stderr)
         await mcp.run_stdio_async()
     except Exception as e:
         print(f"Error starting client: {e}", file=sys.stderr)
@@ -4981,6 +5026,8 @@ async def _main() -> None:
             )
         sys.exit(1)
     finally:
+        if heartbeat_task:
+            heartbeat_task.cancel()
         try:
             await client.disconnect()
         except Exception:
