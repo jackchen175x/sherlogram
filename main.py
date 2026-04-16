@@ -232,6 +232,11 @@ def log_and_format_error(
     if user_message:
         return user_message
 
+    # 尝试分类错误，给出更精准的提示
+    classified = classify_error(error)
+    if classified:
+        return f"{classified} (code: {error_code})"
+
     return f"An error occurred (code: {error_code}). Check mcp_errors.log for details."
 
 
@@ -363,22 +368,63 @@ async def ensure_connected(max_retries: int = 3, delay: float = 2.0):
 async def safe_call(coro, timeout: float = 30.0):
     """执行 Telegram API 调用，带连接检查和超时保护"""
     await ensure_connected()
-    return await asyncio.wait_for(coro, timeout=timeout)
+    try:
+        return await asyncio.wait_for(coro, timeout=timeout)
+    except asyncio.TimeoutError:
+        raise RuntimeError(f"Telegram API request timed out after {timeout}s")
+    except ConnectionError:
+        # 连接断了，尝试重连后重试一次
+        await ensure_connected()
+        return await asyncio.wait_for(coro, timeout=timeout)
+
+
+def classify_error(e: Exception) -> str:
+    """将 Telegram 异常分类为用户友好的错误消息"""
+    error_str = str(e)
+    error_type = type(e).__name__
+
+    if isinstance(e, ConnectionError) or "disconnected" in error_str.lower():
+        return "Connection lost. The client will auto-reconnect on next request."
+    if "FloodWaitError" in error_type or "flood" in error_str.lower():
+        # 提取等待秒数
+        import re
+        m = re.search(r'(\d+)', error_str)
+        wait = m.group(1) if m else "unknown"
+        return f"Rate limited by Telegram. Please wait {wait} seconds before retrying."
+    if "AuthKeyError" in error_type or "Unauthorized" in error_type or "SESSION_REVOKED" in error_str:
+        return "Session expired or revoked. Please regenerate your session string."
+    if "ChatAdminRequiredError" in error_type:
+        return "Admin privileges required for this operation."
+    if "UserNotParticipantError" in error_type:
+        return "You are not a member of this chat."
+    if "PeerIdInvalidError" in error_type or "PeerIdInvalid" in error_str:
+        return "Invalid chat/user ID. Please verify the ID is correct."
+    if isinstance(e, asyncio.TimeoutError) or isinstance(e, RuntimeError) and "timed out" in error_str:
+        return "Request timed out. Telegram may be slow — please retry."
+
+    return ""  # 无特殊分类，走默认处理
+
+
+# Entity 缓存：避免每次 resolve 失败都拉全量 dialogs
+_entity_cache: Dict[Union[int, str], Any] = {}
 
 
 async def resolve_entity(identifier: Union[int, str]) -> Any:
-    """Resolve entity with automatic cache warming on miss.
-
-    StringSession has no persistent entity cache. If get_entity() fails
-    because the cache is cold (ValueError on PeerUser lookup for group IDs),
-    warm the cache via get_dialogs() and retry.
-    """
+    """Resolve entity with local cache + automatic cache warming on miss."""
     await ensure_connected()
+    # 先查本地缓存
+    if identifier in _entity_cache:
+        return _entity_cache[identifier]
     try:
-        return await client.get_entity(identifier)
+        entity = await client.get_entity(identifier)
+        _entity_cache[identifier] = entity
+        return entity
     except ValueError:
+        # 缓存冷启动，拉 dialogs 预热
         await client.get_dialogs()
-        return await client.get_entity(identifier)
+        entity = await client.get_entity(identifier)
+        _entity_cache[identifier] = entity
+        return entity
 
 
 async def resolve_input_entity(identifier: Union[int, str]) -> Any:

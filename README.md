@@ -709,6 +709,29 @@ This project is licensed under the [Apache 2.0 License](LICENSE).
 
 **Maintained by [@chigwell](https://github.com/chigwell) and [@l1v0n1](https://github.com/l1v0n1). PRs welcome!**
 
+## Troubleshooting
+
+### "Cannot send requests while disconnected"
+Client 会自动重连（最多 3 次重试），后台心跳每 2 分钟检测。如果持续失败：
+1. 检查网络连接和 VPN 状态
+2. 确认 `TELEGRAM_SESSION_STRING` 未过期（被登出或新设备挤掉）
+3. 重新生成 session：`python session_string_generator.py`
+
+### "Rate limited by Telegram"
+Telegram API 有频率限制，批量操作时可能触发。等待提示的秒数后重试即可。
+
+### "Session expired or revoked"
+Session string 失效了（常见于：手动在 Telegram 设置中终止了该会话）。重新运行 `python session_string_generator.py` 生成新的。
+
+### 启动缓慢
+首次启动需要拉取所有 dialogs 预热缓存（StringSession 无持久缓存）。对话多的账号可能需要 10-30 秒。后续使用有本地内存缓存，会快很多。
+
+### 调试日志
+默认只记录 ERROR 级别日志。需要详细日志时设置环境变量：
+```bash
+LOG_LEVEL=INFO  # 或 DEBUG
+```
+
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=chigwell/telegram-mcp&type=Date)](https://www.star-history.com/#chigwell/telegram-mcp&Date)
