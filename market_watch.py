@@ -20,6 +20,7 @@ import asyncio
 import json
 import re
 import sys
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -182,6 +183,115 @@ async def check_history(row: dict, t: dict) -> None:
         row["past_posts_alive"] = alive_n
         if alive_n == 0:
             row["history_wiped"] = True
+
+
+# 品类词典：直接抄三份报告里已经出现过的枚举，不自己发明分类
+CATEGORIES = {
+    "GPT Plus": [r"gpt\s*plus", r"plus\s*月卡", r"chatgpt\s*plus"],
+    "GPT Pro 5x": [r"(?:gpt\s*)?pro\s*5\s*x", r"5\s*倍\s*pro"],
+    "GPT Pro 20x": [r"(?:gpt\s*)?pro\s*20\s*x", r"20\s*倍\s*pro"],
+    "Claude Pro": [r"claude\s*pro"],
+    "Claude 5x": [r"claude\s*(?:max\s*)?5\s*x"],
+    "Claude 20x": [r"claude\s*(?:max\s*)?20\s*x"],
+    "Gemini Pro": [r"gemini\s*pro"],
+    "Gemini Ultra": [r"gemini\s*ultra"],
+    "Grok": [r"grok"],
+    "Gmail/Pixel": [r"gmail", r"pixel", r"谷歌邮箱"],
+    "API 额度": [r"api\s*(?:额度|key)", r"\d+\s*刀\s*额度"],
+}
+CATEGORY_RES = {k: re.compile("|".join(v), re.I) for k, v in CATEGORIES.items()}
+# 刀/u/usd 折人民币用写死的常量，不联网取汇率 —— 这里要的是可复现，不是精确
+USD_CNY = 7.2
+PRICE_UNIT_RE = re.compile(
+    r"(\d+(?:\.\d+)?)\s*(r\b|rmb|元|块|¥|刀|u\b|usd|美金)", re.I
+)
+PAIR_WINDOW = 20  # 品类词与价格相隔超过这么多字符就不算一对
+
+
+def _to_cny(num: float, unit: str) -> float:
+    return num * USD_CNY if unit.lower() in ("刀", "u", "usd", "美金") else num
+
+
+def extract_priced_items(text: str) -> list:
+    """从一段文案里抽出 (品类, 人民币价) 对。
+
+    配对窗口 20 字符是关键的一刀：4-29 的 top_prices 里混着「价格比 GPT-5.4」
+    「价格是一模一样的，都差不多一辆宝马X5」这种噪音，就是因为把整条消息里
+    任意距离的品类词和数字都配了对。
+    """
+    items = []
+    for pm in PRICE_UNIT_RE.finditer(text):
+        num, unit = float(pm.group(1)), pm.group(2)
+        before, after = (None, 10**9), (None, 10**9)
+        for cat, rx in CATEGORY_RES.items():
+            for cm in rx.finditer(text):
+                if cm.end() <= pm.start():          # 品类在价格之前
+                    d = pm.start() - cm.end()
+                    if d <= PAIR_WINDOW and d < before[1]:
+                        before = (cat, d)
+                elif cm.start() >= pm.end():        # 品类在价格之后
+                    d = cm.start() - pm.end()
+                    if d <= PAIR_WINDOW and d < after[1]:
+                        after = (cat, d)
+        # 一律优先取价格**之前**的品类。报价单的格式永远是「品类 价格」，
+        # 而按"最近"配对会把价格配给下一个品类 —— 实测
+        # 「Claude 5x 278rmb Claude 20x 475rmb」四个配对全错，
+        # 278 被配给了 Claude 20x（它离得更近），整条价格基线会系统性错位。
+        best = before[0] or after[0]
+        if best:
+            items.append({"category": best, "cny": round(_to_cny(num, unit), 2),
+                          "raw": pm.group(0)})
+    return items
+
+
+def price_report(corpus_paths) -> dict:
+    """按品类算中位数和 MAD，标出"低到不可能"的报价。
+
+    用中位数 + MAD 而不是均值/标准差：这个市场是长尾，几条离谱高价就能把均值拉飞。
+    「报价突然低于群内常见价太多」是识别假货最有效的单一规则，但它需要同品类基线。
+
+    同时算每个卖家的 price_transparency —— 很多卖家**故意不在群里报价**
+    （「详情卡网」「私聊我」），那不是数据缺失，那正是六维里「是否有明确价格」
+    这一维该扣分的地方。不要去替他把价格挖出来。
+    """
+    from statistics import median
+
+    by_cat = defaultdict(list)
+    seller_msgs, seller_priced = Counter(), Counter()
+    samples = []
+    for p in corpus_paths:
+        d = json.loads(Path(p).read_text())
+        for r in d.get("sale_records", []):
+            text = r.get("text_snippet") or ""
+            u = ((r.get("sender") or {}).get("username") or "").lower()
+            if u:
+                seller_msgs[u] += 1
+            items = extract_priced_items(text)
+            if items and u:
+                seller_priced[u] += 1
+            for it in items:
+                by_cat[it["category"]].append(it["cny"])
+                samples.append({**it, "seller": u, "date": (r.get("date") or "")[:10]})
+
+    stats = {}
+    for cat, vals in by_cat.items():
+        if len(vals) < 5:
+            continue  # 样本太少，中位数没有意义
+        med = median(vals)
+        mad = median([abs(v - med) for v in vals]) or 1.0
+        stats[cat] = {"n": len(vals), "median": round(med, 2), "mad": round(mad, 2),
+                      "floor": round(max(med - 3 * mad, med * 0.5), 2)}
+
+    outliers = [s for s in samples
+                if s["category"] in stats and s["cny"] < stats[s["category"]]["floor"]]
+
+    transparency = {
+        u: {"msgs": n, "with_price": seller_priced[u],
+            "price_transparency": round(seller_priced[u] / n, 2)}
+        for u, n in seller_msgs.most_common(40) if n >= 5
+    }
+    return {"category_stats": stats, "outliers": outliers[:40],
+            "price_transparency": transparency}
 
 
 # 全市场同时出事的信号词。这些跟单个卖家的信誉无关，但会让所有 A 档在 24 小时内失效。
@@ -629,9 +739,27 @@ def main() -> None:
     ap.add_argument("--per-word", type=int, default=40, help="每个词每群最多取多少条（默认 40）")
     ap.add_argument("--since-days", type=int, default=120, help="只看最近多少天（默认 120）")
     ap.add_argument("--dump-urls", action="store_true", help="抓带链接消息的全文语料")
+    ap.add_argument("--prices", nargs="+", metavar="语料", help="按品类算价格基线并标出离群低价")
     args = ap.parse_args()
 
     sources_ = [c.strip() for c in args.source_chats.split(",") if c.strip()]
+    if args.prices:
+        rep = price_report(args.prices)
+        print(f"{'品类':<14}{'样本':>6}{'中位(¥)':>10}{'MAD':>8}{'低价红线':>10}")
+        print("-" * 50)
+        for cat, st in sorted(rep["category_stats"].items(), key=lambda x: -x[1]["n"]):
+            print(f"{cat:<14}{st['n']:>6}{st['median']:>10}{st['mad']:>8}{st['floor']:>10}")
+        print(f"\n低于红线的报价 {len(rep['outliers'])} 条（低到不可能，需复核）：")
+        for o in rep["outliers"][:10]:
+            print(f"  {o['category']:<12} ¥{o['cny']:<8} @{o['seller'] or '?'} {o['date']}  「{o['raw']}」")
+        print("\n报价透明度最低的卖家（不在群里报价 ≠ 数据缺失，是该扣分的地方）：")
+        low = sorted(rep["price_transparency"].items(), key=lambda x: x[1]["price_transparency"])
+        for u, v in low[:8]:
+            print(f"  @{u:<24} {v['with_price']:>3}/{v['msgs']:<4} = {v['price_transparency']}")
+        if args.out:
+            args.out.write_text(json.dumps(rep, ensure_ascii=False, indent=1))
+            print(f"\n写入 {args.out}")
+        return
     if args.dump_urls:
         if not args.out:
             ap.error("--dump-urls 需要 --out")
