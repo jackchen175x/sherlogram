@@ -340,6 +340,81 @@ async def scan_corpus(
     print(f"负面语料 {len(records)} 条，涉及 {len(accused)} 个被提及的 handle")
 
 
+async def dump_urls(out_path: Path, source_chats: list, since_days: int, delay: float) -> None:
+    """把带链接的消息按全文抓下来，输出成 sockpuppet.py 能直接吃的语料。
+
+    为什么只抓带链接的：卡网、收款页、店铺路径全在这类消息里，而它们是马甲聚类
+    最硬的信号来源。实测 7 个交易群总共只有 2829 条带链接的消息，而消息总量十几万
+    —— 服务端过滤（InputMessagesFilterUrl）让这件事从"不可能"变成"半分钟"。
+
+    为什么必须存全文：4-29 那次只存了 text_snippet，中位长度 68 字符，收款地址和
+    卡网链接大多被截断。这直接封死了马甲聚类的召回率上限。
+    """
+    from telethon.tl import types as tl_types
+
+    await m.client.connect()
+    if not await m.client.is_user_authorized():
+        sys.exit("session 未授权")
+
+    cutoff = datetime.now(timezone.utc).timestamp() - since_days * 86400
+    records, capped = [], []
+    for name in source_chats:
+        try:
+            ent = await m.resolve_entity(name)
+        except Exception as e:
+            print(f"  ! {name} 解析失败: {type(e).__name__}")
+            continue
+        n = 0
+        try:
+            async for msg in m.client.iter_messages(
+                ent, filter=tl_types.InputMessagesFilterUrl()
+            ):
+                if not msg.date or msg.date.timestamp() < cutoff:
+                    break  # 服务端按时间倒序返回，早于窗口即可停
+                text = msg.message or ""
+                sender = msg.sender
+                records.append({
+                    "chat": {"username": name, "peer_id": getattr(ent, "id", None)},
+                    "message_id": msg.id,
+                    "date": msg.date.isoformat(),
+                    "sender": {
+                        "peer_id": msg.sender_id,
+                        "username": getattr(sender, "username", None),
+                        "title": getattr(sender, "title", None)
+                        or getattr(sender, "first_name", None),
+                    },
+                    # 字段名与 4-29 快照对齐，sockpuppet.py 可直接消费
+                    "text_snippet": text,          # 全文，不截断
+                    "external_urls": re.findall(r"https?://[^\s<>\"']+", text),
+                    "telegram_handles": re.findall(r"@([A-Za-z0-9_]{5,32})", text),
+                    "prices": _prices(text),
+                })
+                n += 1
+        except errors.FloodWaitError as e:
+            print(f"  !! FloodWait {e.seconds}s，停止")
+            raise FloodStop(e.seconds) from e
+        except Exception as e:
+            print(f"  ! {name} 抓取中断: {type(e).__name__}")
+        print(f"  {name:<20} {n:>5} 条带链接消息")
+        await asyncio.sleep(delay)
+
+    named = sum(1 for r in records if r["sender"]["username"])
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps({
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "note": "带链接消息的全文语料（filter=InputMessagesFilterUrl）。字段与 4-29 快照对齐。",
+        "since_days": since_days,
+        "source_chats": source_chats,
+        "sale_records_count": len(records),
+        "sale_records": records,
+    }, ensure_ascii=False, indent=1))
+    await m.client.disconnect()
+    print(f"\n写入 {out_path}")
+    print(f"共 {len(records)} 条，其中 {named} 条能拿到发送者 username")
+    lens = sorted(len(r["text_snippet"]) for r in records) or [0]
+    print(f"正文长度中位 {lens[len(lens)//2]} 字符（4-29 那份是 68）")
+
+
 def load_jsonl(p: Path) -> dict:
     return {json.loads(l)["username"]: json.loads(l) for l in p.read_text().splitlines() if l.strip()}
 
@@ -395,10 +470,18 @@ def main() -> None:
     ap.add_argument("--scan-corpus", action="store_true", help="搜负面词反查被指认的 handle")
     ap.add_argument("--per-word", type=int, default=40, help="每个词每群最多取多少条（默认 40）")
     ap.add_argument("--since-days", type=int, default=120, help="只看最近多少天（默认 120）")
+    ap.add_argument("--dump-urls", action="store_true", help="抓带链接消息的全文语料")
     args = ap.parse_args()
 
     sources_ = [c.strip() for c in args.source_chats.split(",") if c.strip()]
-    if args.scan_corpus:
+    if args.dump_urls:
+        if not args.out:
+            ap.error("--dump-urls 需要 --out")
+        try:
+            asyncio.run(dump_urls(args.out, sources_, args.since_days, args.delay))
+        except FloodStop as fs:
+            sys.exit(f"因 FloodWait({fs.seconds}s) 中止")
+    elif args.scan_corpus:
         if not args.out:
             ap.error("--scan-corpus 需要 --out")
         try:
