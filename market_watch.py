@@ -184,6 +184,82 @@ async def check_history(row: dict, t: dict) -> None:
             row["history_wiped"] = True
 
 
+# 全市场同时出事的信号词。这些跟单个卖家的信誉无关，但会让所有 A 档在 24 小时内失效。
+REGIME_WORDS = [
+    "重置额度", "官方下场", "大面积掉", "全网都掉", "批量退款",
+    "暂停接单", "不再接单", "全线掉", "都掉了",
+]
+# 光有信号词会误报：实测「重置额度」命中的是「谁能弄 gpt 额度重置」「每个付款周期
+# 能用几次重置额度」这类正常聊天。原始证据里真正有判别力的是**规模**——
+# 「凌晨 重置额度 官方下场 全网所有渠道充值 Pro 基本掉了 80%」。
+# 所以命中之后还要求文本里出现规模词，否则不算市场级事件。
+# 注意不要放「批量」这类词：卖家广告里「批量出 claude max」满天飞，会把刷屏广告
+# 全部误判成市场事件（实测就是如此，11 条命中全是同一条广告）。
+REGIME_SCALE_RE = re.compile(
+    r"全网|全线|所有渠道|各家都|大面积|集体|都掉了|一起掉|掉了\s*\d+\s*%?|官方下场|封了一批"
+)
+
+
+async def check_regime(source_chats: list, hours: int = 72) -> dict:
+    """市场级降级因子：最近 72 小时有没有"全市场一起掉链子"。
+
+    真实教训：2026-04-28 群里有人说「凌晨 重置额度 官方下场 全网所有渠道充值 Pro
+    基本掉了 80%」，**次日**的性价比报告仍把某家列为 A 档首选；而同期另一家已经在
+    发退款通知了。这类信号不属于任何一个卖家，却会让所有 A 档在 24 小时内失效。
+
+    要求跨 ≥2 个独立群命中，避免一个群里几个人聊同一件事就触发。
+    """
+    cutoff = datetime.now(timezone.utc).timestamp() - hours * 3600
+    hits, chats_hit = [], set()
+    for name in source_chats:
+        try:
+            ent = await m.resolve_entity(name)
+        except Exception:
+            continue
+        for word in REGIME_WORDS:
+            try:
+                async for msg in m.client.iter_messages(ent, search=word, limit=10):
+                    if not msg.date or msg.date.timestamp() < cutoff:
+                        break
+                    text = msg.message or ""
+                    # Telegram 全文搜索会分词：搜「批量退款」会命中同时含「批量」和
+                    # 「退款」的普通广告。必须回头确认原词逐字出现。
+                    if word not in text:
+                        continue
+                    if not REGIME_SCALE_RE.search(text):
+                        continue  # 有信号词但没有规模词 —— 是日常聊天，不是市场事件
+                    hits.append({
+                        "chat": name, "word": word, "message_id": msg.id,
+                        "date": msg.date.strftime("%Y-%m-%d %H:%M"),
+                        "text": (msg.message or "")[:200],
+                    })
+                    chats_hit.add(name)
+            except Exception:
+                continue
+
+    # 同一条刷屏广告发几十遍不该算几十次事件：按归一化文案去重
+    uniq, seen_text = {}, set()
+    for h in hits:
+        fp = re.sub(r"\s+", "", h["text"])[:120]
+        if fp in seen_text:
+            continue
+        seen_text.add(fp)
+        uniq[(h["chat"], h["message_id"])] = h
+    n = len(uniq) if len(chats_hit) >= 2 else 0
+    level = 2 if n >= 5 else (1 if n >= 2 else 0)
+    return {
+        "level": level,
+        "window_hours": hours,
+        "distinct_chats": len(chats_hit),
+        "hits": list(uniq.values())[:12],
+        "meaning": {
+            0: "正常",
+            1: "观察：出现市场级异动，试单前再看一眼",
+            2: "冻结：市场级掉订阅事件进行中，本轮所有 A 档强制降 B，不建议试单",
+        }[level],
+    }
+
+
 def classify_domains(hosts: set) -> dict:
     """卡网域名分类。「打不开」必须区分成两件事：
 
@@ -271,6 +347,17 @@ async def scan(
         print(f"  [{i:>2}/{len(targets)}] {mark} @{row['username']:<22} {row['status']}")
         if i < len(targets):
             await asyncio.sleep(delay)  # ResolveUsername 是已知封号源，别连打
+
+    # 市场 regime：全局状态，写进每一行，让快照自带上下文
+    regime = await check_regime(source_chats)
+    for r in rows:
+        r["market_regime"] = regime["level"]
+    mark = {0: "·", 1: "⚠️", 2: "🛑"}[regime["level"]]
+    print(f"\n{mark} 市场状态 level={regime['level']} —— {regime['meaning']}")
+    if regime["hits"]:
+        print(f"   72h 内跨 {regime['distinct_chats']} 个群命中 {len(regime['hits'])} 条：")
+        for h in regime["hits"][:3]:
+            print(f"     [{h['word']}] {h['date']} {h['chat']}: {h['text'][:60]}")
 
     await m.client.disconnect()
 

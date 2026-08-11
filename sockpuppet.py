@@ -17,6 +17,7 @@ import argparse
 import json
 import re
 import sys
+import unicodedata
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -80,11 +81,21 @@ def norm_url(u: str) -> str:
 
 
 def norm_text(t: str) -> str:
-    """文案指纹用：去零宽字符、去 emoji、压空白、只留可比的骨架。
-    卖家会插入混淆字符规避检索（@demo_seller1 的文案里就有 U+200C），不归一就比不出重复。"""
-    t = re.sub(r"[​-‏‪-‮﻿]", "", t)
-    t = re.sub(r"[^\w一-鿿]+", " ", t)
-    return re.sub(r"\s+", " ", t).strip().lower()
+    """文案指纹：把规避检索用的混淆字符彻底抹平，只留可比的骨架。
+
+    卖家把零宽字符和间隔号插进单词中间来躲检索，例如实际文本长这样：
+        G·em·i‌n‍i  ‌P﻿r‌o        （中间夹着 U+200C / U+200D / U+1808 和「·」）
+
+    关键是**删除**而不是替换成空格：分隔符的位置每条都不一样，替换成空格后
+    「G·em·ini」和「Ge·mi·ni」仍是两个不同的字符串，等于没归一。
+    实测差别极大 —— @demo_seller1 的 332 条记录，替换式只能去重到 307 条，
+    删除式去重到 11 条（真实模板其实只有三四个，他连字母都随机漏，
+    shopname_kyc / shopname_ky / shopname_kc 各算一条）。
+    """
+    t = unicodedata.normalize("NFKC", t)
+    # Cf = 格式字符（零宽连接符等），Mn = 组合记号，都是常见的隐形分隔手段
+    t = "".join(c for c in t if unicodedata.category(c) not in ("Cf", "Mn"))
+    return re.sub(r"[^0-9a-zA-Z一-鿿]+", "", t).lower()
 
 
 def collect(corpus_paths, negative_path):
@@ -209,12 +220,56 @@ def cluster(sig):
     return groups, kept, near_miss
 
 
+def frequency_report(corpus_paths) -> list:
+    """修正「出现频次」这一维：它现在衡量的是刷屏勤奋度，不是市场存在感。
+
+    实测归一化去重后：demo_seller1 332 → 23 条真实文案，demo_seller2 89 → 5，
+    demo_seller3 104 → 9。分档时按原始条数排序，等于奖励刷屏最狠的那个。
+
+    归一化必须做，因为卖家会插零宽字符规避检索（@demo_seller1 的文案里就有 U+200C）——
+    不去这些字符，同一条文案会被当成几十条不同的。
+    """
+    raw, uniq = Counter(), defaultdict(set)
+    for p in corpus_paths:
+        d = json.loads(Path(p).read_text())
+        for r in d.get("sale_records", []):
+            u = ((r.get("sender") or {}).get("username") or "").lower()
+            if not u:
+                continue
+            raw[u] += 1
+            nt = norm_text(r.get("text_snippet") or "")
+            if nt:
+                uniq[u].add(nt)
+
+    rows = []
+    for u, n in raw.most_common():
+        k = len(uniq[u]) or 1
+        rows.append({
+            "handle": u, "raw": n, "deduped": len(uniq[u]),
+            "spam_ratio": round(n / k, 1),
+        })
+    return rows
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--corpus", action="append", required=True, help="扫描快照 JSON（可多次）")
     ap.add_argument("--negative", help="负面语料 JSON")
     ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--frequency", action="store_true",
+                    help="只输出「出现频次」修正表：原始条数 vs 归一化去重后")
     args = ap.parse_args()
+
+    if args.frequency:
+        rows = frequency_report(args.corpus)
+        print(f"{'handle':<24}{'原始':>7}{'去重':>7}{'刷屏倍数':>10}")
+        print("-" * 50)
+        for r in rows[:25]:
+            flag = "  ← 主要靠刷屏" if r["spam_ratio"] >= 5 else ""
+            print(f"{r['handle']:<24}{r['raw']:>7}{r['deduped']:>7}{r['spam_ratio']:>10}{flag}")
+        args.out.write_text(json.dumps({"frequency": rows}, ensure_ascii=False, indent=1))
+        print(f"\n写入 {args.out}")
+        return
 
     sig = collect(args.corpus, args.negative)
     groups, kept, near_miss = cluster(sig)

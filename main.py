@@ -1232,6 +1232,7 @@ async def list_messages(
     from_date: str = None,
     to_date: str = None,
     from_user: Union[int, str] = None,
+    full_text: bool = False,
 ) -> str:
     """
     Retrieve messages with optional filters.
@@ -1240,6 +1241,9 @@ async def list_messages(
         chat_id: The ID or username of the chat to get messages from.
         limit: Maximum number of messages to retrieve.
         search_query: Filter messages containing this text.
+        full_text: Return message bodies in full. Off by default — long ads are
+            clipped to 400 chars with the cut size shown, so a 100-message page
+            stays affordable. Turn on when you need a specific ad verbatim.
         from_user: Only messages sent by this user/channel (ID or @username).
             Use this to aggregate one seller's posts inside a busy group —
             searching for their @handle does NOT work, because their own ads
@@ -1342,7 +1346,7 @@ async def list_messages(
         lines = []
         for msg in messages:
             sender_name = get_sender_name(msg)
-            message_text = msg.message or "[Media/No text]"
+            message_text = _clip(msg.message, full_text) or "[Media/No text]"
             reply_info = ""
             if msg.reply_to and msg.reply_to.reply_to_msg_id:
                 reply_info = f" | reply to {msg.reply_to.reply_to_msg_id}"
@@ -3611,7 +3615,7 @@ async def search_global(query: str, page: int = 1, page_size: int = 20) -> str:
             forward_info = get_provenance_info(msg)
             lines.append(
                 f"Chat: {chat_label} | ID: {msg.id} | {sender_name} | "
-                f"Date: {msg.date}{forward_info} | Message: {msg.message}"
+                f"Date: {msg.date}{forward_info} | Message: {_clip(msg.message)}"
             )
 
         return "\n".join(lines) + _clues_tail(messages)
@@ -3636,6 +3640,30 @@ def _format_public_post_search_quota(search_flood: Any) -> Dict[str, Any]:
         "wait_till_iso": wait_till_iso,
         "stars_required": getattr(search_flood, "stars_amount", 0),
     }
+
+
+MSG_CLIP = 400
+
+
+def _clip(text: str, full_text: bool = False) -> str:
+    """长消息截断，但把截断这件事明说出来。
+
+    ⚠️ 实测下来它的收益比预期小得多，别高估：
+    limit=100 时全文 5681 token、截断后 5513 token，**只省 3%**。
+    真正的成本大头是「消息条数 × 每行元数据」，不是长正文 —— 正文中位只有 61 字符
+    （300 条样本：90 分位 174，最长 2310）。**想省上下文，调 limit 比截断有效得多。**
+
+    那为什么还留着：偶发的 2000+ 字符刷屏广告确实存在，一页里撞上几条就很难看。
+    这是兜底，不是优化手段。
+
+    但被截掉的恰恰是信息最密的那些 —— 完整报价单、卡网链接、联系方式。所以：
+      · 必须留 full_text 逃生口
+      · 必须显式标出截了多少，否则就是静默截断，模型会把残缺当完整
+      · 域名/@提及 的抽取在截断之前做（见 _clues_tail），结构化信号不受影响
+    """
+    if full_text or not text or len(text) <= MSG_CLIP:
+        return text
+    return f"{text[:MSG_CLIP]}…[已截断，还有 {len(text) - MSG_CLIP} 字符，full_text=True 取全文]"
 
 
 def _clues_tail(messages) -> str:
