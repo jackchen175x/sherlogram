@@ -118,7 +118,9 @@ This MCP server exposes a huge suite of Telegram tools. **Every major Telegram/T
 ### Search & Discovery
 - **search_public_chats(query, limit)**: Search public chats/channels/bots with a configurable result limit
 - **search_messages(chat_id, query, limit)**: Search messages in a chat
-- **search_global(query, page, page_size)**: Search messages globally with pagination
+- **search_global(query, page, page_size)**: Search messages across chats visible to the current account
+- **check_public_post_search_quota(query)**: Check remaining public-post full-text search quota without searching
+- **search_public_posts(query, hashtag, limit, offset_rate, offset_peer, offset_id)**: Search posts across all public channels, including channels the account has not joined; never spends Telegram Stars
 - **resolve_username(username)**: Resolve a username to ID
 
 ### Stickers, GIFs, Bots
@@ -563,6 +565,40 @@ Example output:
   }
 ]
 ```
+
+### Searching Posts Across All Public Channels
+
+Telegram's **Posts** tab is different from the legacy global message search. Use
+`search_public_posts` to search public channel posts, including channels the account has
+not joined. The implementation uses Telegram's official
+[`channels.searchPosts`](https://core.telegram.org/method/channels.searchPosts) method.
+
+Full-text searches have a limited daily free quota. Check it first without consuming a
+slot:
+
+```text
+check_public_post_search_quota(query="GEO")
+```
+
+Run the first page:
+
+```text
+search_public_posts(query="GEO", limit=20)
+```
+
+Alternatively, search a public hashtag without using a full-text search slot:
+
+```text
+search_public_posts(hashtag="GEO", limit=20)
+```
+
+The response includes original post URLs, engagement data, quota information, and a
+`clues` section containing recurring channels, hashtags, mentions, and linked domains.
+Use these clues to refine or expand the next query instead of repeating a fixed keyword.
+It also returns a `next_offset` object; pass its three fields back to continue pagination.
+Pagination calls do not consume additional full-text slots. This MCP tool never
+authorizes Telegram Star payments; when the free quota is exhausted, it returns
+`quota_exhausted` instead.
 
 ### Getting Direct Chats with Contacts
 

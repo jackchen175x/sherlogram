@@ -7,6 +7,7 @@ import asyncio
 import sqlite3
 import logging
 import mimetypes
+from collections import Counter
 from datetime import datetime, timedelta
 from enum import Enum
 from typing import List, Dict, Optional, Union, Any
@@ -1550,29 +1551,43 @@ async def get_chat(chat_id: Union[int, str]) -> str:
             result.append(f"Bot: {'Yes' if entity.bot else 'No'}")
             result.append(f"Verified: {'Yes' if entity.verified else 'No'}")
 
-        # Get last activity if it's a dialog
+        # Unread counts only exist for chats that are actually in the account's
+        # dialog list.  ``offset_peer`` is a pagination cursor, not a filter;
+        # using it with ``limit=1`` can return the next unrelated dialog.
         try:
-            # Using get_dialogs might be slow if there are many dialogs
-            # Alternative: Get entity again via get_dialogs if needed for unread count
-            dialog = await client.get_dialogs(limit=1, offset_id=0, offset_peer=entity)
-            if dialog:
-                dialog = dialog[0]
+            entity_peer_id = utils.get_peer_id(entity)
+            dialogs = await client.get_dialogs()
+            dialog = next(
+                (
+                    item
+                    for item in dialogs
+                    if utils.get_peer_id(item.entity) == entity_peer_id
+                ),
+                None,
+            )
+            if dialog is not None:
                 result.append(f"Unread Messages: {dialog.unread_count}")
-                if dialog.message:
-                    last_msg = dialog.message
-                    sender_name = "Unknown"
-                    if last_msg.sender:
-                        sender_name = getattr(last_msg.sender, "first_name", "") or getattr(
-                            last_msg.sender, "title", "Unknown"
-                        )
-                        if hasattr(last_msg.sender, "last_name") and last_msg.sender.last_name:
-                            sender_name += f" {last_msg.sender.last_name}"
-                    sender_name = sender_name.strip() or "Unknown"
-                    result.append(f"Last Message: From {sender_name} at {last_msg.date}")
-                    result.append(f"Message: {last_msg.message or '[Media/No text]'}")
         except Exception as diag_ex:
             logger.warning(f"Could not get dialog info for {chat_id}: {diag_ex}")
-            pass
+
+        # Fetch the latest message from the resolved target itself.  This also
+        # works for accessible public channels that the account has not joined.
+        try:
+            messages = await client.get_messages(entity, limit=1)
+            if messages:
+                last_msg = messages[0]
+                sender_name = "Unknown"
+                if last_msg.sender:
+                    sender_name = getattr(last_msg.sender, "first_name", "") or getattr(
+                        last_msg.sender, "title", "Unknown"
+                    )
+                    if hasattr(last_msg.sender, "last_name") and last_msg.sender.last_name:
+                        sender_name += f" {last_msg.sender.last_name}"
+                sender_name = sender_name.strip() or "Unknown"
+                result.append(f"Last Message: From {sender_name} at {last_msg.date}")
+                result.append(f"Message: {last_msg.message or '[Media/No text]'}")
+        except Exception as message_ex:
+            logger.warning(f"Could not get latest message for {chat_id}: {message_ex}")
 
         return "\n".join(result)
     except Exception as e:
@@ -3448,7 +3463,10 @@ async def search_messages(chat_id: Union[int, str], query: str, limit: int = 20)
 )
 async def search_global(query: str, page: int = 1, page_size: int = 20) -> str:
     """
-    Search for messages across all public chats and channels by text content.
+    Search for messages across chats visible to the current account.
+
+    This uses Telegram's legacy global message search. To search posts from
+    public channels the account has not joined, use search_public_posts.
     """
     try:
         offset = (page - 1) * page_size
@@ -3478,6 +3496,263 @@ async def search_global(query: str, page: int = 1, page_size: int = 20) -> str:
     except Exception as e:
         return log_and_format_error(
             "search_global", e, query=query, page=page, page_size=page_size
+        )
+
+
+def _format_public_post_search_quota(search_flood: Any) -> Dict[str, Any]:
+    """Convert Telegram's SearchPostsFlood result into JSON-safe quota metadata."""
+    wait_till = getattr(search_flood, "wait_till", None)
+    wait_till_iso = None
+    if wait_till:
+        wait_till_iso = datetime.fromtimestamp(wait_till).astimezone().isoformat()
+
+    return {
+        "total_daily": getattr(search_flood, "total_daily", 0),
+        "remains": getattr(search_flood, "remains", 0),
+        "query_is_free": bool(getattr(search_flood, "query_is_free", False)),
+        "wait_till": wait_till,
+        "wait_till_iso": wait_till_iso,
+        "stars_required": getattr(search_flood, "stars_amount", 0),
+    }
+
+
+def _extract_public_post_clues(posts: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Extract deterministic pivots for the next step of a public-post investigation."""
+    hashtags: Counter[str] = Counter()
+    mentions: Counter[str] = Counter()
+    linked_domains: Counter[str] = Counter()
+    channels: Dict[str, Dict[str, Any]] = {}
+
+    for post in posts:
+        text = post.get("text") or ""
+        hashtags.update(match.casefold() for match in re.findall(r"#([\w-]+)", text))
+        mentions.update(match.casefold() for match in re.findall(r"@([A-Za-z0-9_]{5,})", text))
+
+        for raw_url in re.findall(r"https?://[^\s<>\"']+", text):
+            cleaned_url = raw_url.rstrip(".,;:!?)]}，。；：！？）】》")
+            domain = urlparse(cleaned_url).netloc.casefold()
+            if domain:
+                linked_domains[domain] += 1
+
+        channel = post.get("channel") or {}
+        channel_key = channel.get("username") or str(channel.get("id") or "")
+        if channel_key:
+            if channel_key not in channels:
+                channels[channel_key] = {
+                    "id": channel.get("id"),
+                    "title": channel.get("title"),
+                    "username": channel.get("username"),
+                    "posts": 0,
+                }
+            channels[channel_key]["posts"] += 1
+
+    def ranked(counter: Counter[str], limit: int = 30) -> List[Dict[str, Any]]:
+        return [
+            {"value": value, "count": count}
+            for value, count in counter.most_common(limit)
+        ]
+
+    return {
+        "hashtags": ranked(hashtags),
+        "mentions": ranked(mentions),
+        "linked_domains": ranked(linked_domains),
+        "channels": sorted(
+            channels.values(),
+            key=lambda item: (-item["posts"], item.get("username") or ""),
+        ),
+    }
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Check Public Post Search Quota",
+        openWorldHint=True,
+        readOnlyHint=True,
+    )
+)
+async def check_public_post_search_quota(query: Optional[str] = None) -> str:
+    """
+    Check Telegram's free-text public post search quota without running a search.
+
+    Passing a query also reports whether Telegram considers that exact query
+    free, for example because it is cached. This tool never spends Telegram Stars.
+    """
+    normalized_query = query.strip() if query else None
+    try:
+        result = await client(
+            functions.channels.CheckSearchPostsFloodRequest(query=normalized_query or None)
+        )
+        return json.dumps(_format_public_post_search_quota(result), indent=2)
+    except Exception as e:
+        return log_and_format_error("check_public_post_search_quota", e, query=normalized_query)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Search Public Posts (No Stars)",
+        openWorldHint=True,
+        readOnlyHint=True,
+    )
+)
+async def search_public_posts(
+    query: Optional[str] = None,
+    hashtag: Optional[str] = None,
+    limit: int = 20,
+    offset_rate: int = 0,
+    offset_peer: Optional[Union[int, str]] = None,
+    offset_id: int = 0,
+) -> str:
+    """
+    Search posts from all public Telegram channels, including unjoined channels.
+
+    Exactly one of query or hashtag is required. Full-text queries use Telegram's
+    limited daily search quota; hashtag searches do not use a full-text slot.
+    This tool checks the quota before a first-page full-text search and never
+    authorizes Telegram Star payments. Pagination calls are free according to
+    Telegram and use the next_offset values returned by the previous call.
+    """
+    normalized_query = query.strip() if query else None
+    normalized_hashtag = hashtag.strip().lstrip("#") if hashtag else None
+
+    if bool(normalized_query) == bool(normalized_hashtag):
+        return json.dumps(
+            {
+                "status": "invalid_request",
+                "error": "Provide exactly one of query or hashtag.",
+            },
+            indent=2,
+        )
+    if not isinstance(limit, int) or not 1 <= limit <= 100:
+        return json.dumps(
+            {"status": "invalid_request", "error": "limit must be between 1 and 100."},
+            indent=2,
+        )
+    if offset_rate < 0 or offset_id < 0:
+        return json.dumps(
+            {
+                "status": "invalid_request",
+                "error": "offset_rate and offset_id must be non-negative.",
+            },
+            indent=2,
+        )
+    if (offset_rate or offset_id) and offset_peer is None:
+        return json.dumps(
+            {
+                "status": "invalid_request",
+                "error": "offset_peer is required when continuing a paginated search.",
+            },
+            indent=2,
+        )
+
+    try:
+        quota = None
+        is_first_page = offset_rate == 0 and offset_id == 0 and offset_peer is None
+        if normalized_query and is_first_page:
+            quota_result = await client(
+                functions.channels.CheckSearchPostsFloodRequest(query=normalized_query)
+            )
+            quota = _format_public_post_search_quota(quota_result)
+            if quota["remains"] <= 0 and not quota["query_is_free"]:
+                return json.dumps(
+                    {
+                        "status": "quota_exhausted",
+                        "message": "No free full-text public post searches remain.",
+                        "quota": quota,
+                        "stars_spent": 0,
+                    },
+                    indent=2,
+                )
+
+        input_offset_peer = (
+            await resolve_input_entity(offset_peer)
+            if offset_peer is not None
+            else types.InputPeerEmpty()
+        )
+        result = await client(
+            functions.channels.SearchPostsRequest(
+                query=normalized_query,
+                hashtag=normalized_hashtag,
+                offset_rate=offset_rate,
+                offset_peer=input_offset_peer,
+                offset_id=offset_id,
+                limit=limit,
+                allow_paid_stars=None,
+            )
+        )
+
+        chat_by_id = {utils.get_peer_id(chat): chat for chat in getattr(result, "chats", [])}
+        posts = []
+        for message in getattr(result, "messages", []):
+            peer_id = utils.get_peer_id(message.peer_id)
+            chat = chat_by_id.get(peer_id)
+            username = getattr(chat, "username", None) if chat else None
+
+            post = format_message(message)
+            post["channel"] = {
+                "id": peer_id,
+                "title": getattr(chat, "title", None) if chat else None,
+                "username": username,
+            }
+            post["url"] = f"https://t.me/{username}/{message.id}" if username else None
+            post["views"] = getattr(message, "views", None)
+            post["forwards"] = getattr(message, "forwards", None)
+
+            reactions = getattr(message, "reactions", None)
+            reaction_results = getattr(reactions, "results", None) if reactions else None
+            post["reactions"] = (
+                sum(getattr(item, "count", 0) or 0 for item in reaction_results)
+                if reaction_results
+                else 0
+            )
+            posts.append(post)
+
+        next_offset = None
+        if posts:
+            last_message = result.messages[-1]
+            last_peer_id = utils.get_peer_id(last_message.peer_id)
+            last_chat = chat_by_id.get(last_peer_id)
+            last_username = getattr(last_chat, "username", None) if last_chat else None
+            next_rate = getattr(result, "next_rate", None)
+            if next_rate is None and getattr(last_message, "date", None):
+                next_rate = int(last_message.date.timestamp())
+            next_offset = {
+                "offset_rate": next_rate or 0,
+                "offset_peer": f"@{last_username}" if last_username else last_peer_id,
+                "offset_id": last_message.id,
+            }
+
+        updated_quota = getattr(result, "search_flood", None)
+        if updated_quota is not None:
+            quota = _format_public_post_search_quota(updated_quota)
+
+        return json.dumps(
+            {
+                "status": "ok",
+                "mode": "query" if normalized_query else "hashtag",
+                "query": normalized_query,
+                "hashtag": normalized_hashtag,
+                "count": getattr(result, "count", len(posts)),
+                "inexact": bool(getattr(result, "inexact", False)),
+                "returned": len(posts),
+                "posts": posts,
+                "clues": _extract_public_post_clues(posts),
+                "next_offset": next_offset,
+                "quota": quota,
+                "stars_spent": 0,
+            },
+            indent=2,
+            default=json_serializer,
+        )
+    except Exception as e:
+        return log_and_format_error(
+            "search_public_posts",
+            e,
+            query=normalized_query,
+            hashtag=normalized_hashtag,
+            limit=limit,
+            offset_rate=offset_rate,
+            offset_peer=offset_peer,
+            offset_id=offset_id,
         )
 
 
