@@ -683,6 +683,145 @@ async def dump_urls(out_path: Path, source_chats: list, since_days: int, delay: 
     print(f"正文长度中位 {lens[len(lens)//2]} 字符（4-29 那份是 68）")
 
 
+DISCLAIMER = (
+    "只做相对可核查度分层，不构成购买背书。这个市场天然有封号、掉订阅、不到账、"
+    "售后失联的风险，且多数商业模式违反官方条款。任何档位都不代表安全。"
+)
+TIER_DEF = {
+    "A": "近期活跃 + 报价明确 + 卡网可访问 + 无负面命中",
+    "B": "活跃或频次高，但证据单一 / 报价不透明 / 商品风险更高",
+    "C": "证据不足，或长期沉寂，或商业模式风险高",
+    "D": "已消失 / 痕迹被抹除 / 卡网被判钓鱼 / 与被指认的骗子同组",
+}
+
+
+def build_report(snapshot: Path, negative: Path, clusters: Path,
+                 frequency: Path, prices: Path) -> dict:
+    """把各路产物合成一份分档结论。
+
+    固化结论的形状是有原因的：此前每次调研都从零重新发明报告结构，
+    于是两份报告无法比对、也无法复算 —— 直接堵死了"三个月后再查一次"。
+
+    评分规则全部写死、可复算，不调参。输出永远带 evidence 和 disclaimer：
+    没有原文出处的判断不该出现在结论里。
+    """
+    rows = [json.loads(x) for x in snapshot.read_text().splitlines() if x.strip()]
+    acc = json.loads(negative.read_text()).get("accused", {}) if negative else {}
+    cl = json.loads(clusters.read_text()).get("clusters", []) if clusters else []
+    freq = {r["handle"]: r for r in
+            (json.loads(frequency.read_text()).get("frequency", []) if frequency else [])}
+    pr = json.loads(prices.read_text()) if prices else {}
+    trans, outliers = pr.get("price_transparency", {}), pr.get("outliers", [])
+
+    # handle → 同组的其他号
+    group_of = {}
+    for c in cl:
+        for h in c["members"]:
+            group_of[h] = c
+    out_by_seller = defaultdict(list)
+    for o in outliers:
+        out_by_seller[o.get("seller", "")].append(o)
+
+    regime = max((r.get("market_regime") or 0) for r in rows) if rows else 0
+    results = []
+    for r in rows:
+        u = r["username"].lower()
+        flags, ev = [], []
+
+        if not r.get("alive"):
+            flags.append("username 已消失")
+            ev.append({"dimension": "存活", "quote": r.get("status"), "observed_at": r["checked_at"][:10]})
+        if r.get("history_wiped"):
+            flags.append(f"历史帖被整片删除（抽查 {r.get('past_posts_checked')} 条全不在）")
+            ev.append({"dimension": "痕迹", "quote": "past_posts_alive=0", "observed_at": r["checked_at"][:10]})
+        if r.get("phishing_domains"):
+            flags.append(f"卡网被 Cloudflare 判定为钓鱼：{', '.join(r['phishing_domains'])}")
+        for f in ("scam", "fake", "restricted"):
+            if r.get(f):
+                flags.append(f"官方标记 {f}")
+
+        hit = acc.get(u)
+        if hit:
+            flags.append(f"群内被指认 {hit['total']} 次：{list(hit['by_word'])}")
+            ev.append({"dimension": "负面", "quote": str(hit["by_word"]), "observed_at": "见负面语料"})
+
+        grp = group_of.get(u)
+        mates = [x for x in (grp["members"] if grp else []) if x != u]
+        accused_mates = [x for x in mates if x in acc]
+        if accused_mates:
+            flags.append(f"与被指认者同组：{', '.join('@' + x for x in accused_mates)}")
+
+        fq = freq.get(u, {})
+        spam = fq.get("spam_ratio")
+        if spam and spam >= 5:
+            flags.append(f"活跃度靠刷屏：{fq['raw']} 条只有 {fq['deduped']} 条真实文案（{spam} 倍）")
+
+        # 报价透明度：语料按 sender 索引，而频道自己发的帖不在里面 —— 那是数据缺口，
+        # 不是"不透明"。缺口用快照自己采的样本补：它已经对每个对象抓了 30 条消息。
+        # 这个区分很要紧：把"没数据"当成"0 分"，会把还在正常报价的频道一起打下去。
+        tp = trans.get(u, {}).get("price_transparency")
+        tp_src = "corpus" if tp is not None else None
+        if tp is None and r.get("msgs_sampled"):
+            tp = round(min(len(r.get("prices") or []) / 5.0, 1.0), 2)
+            tp_src = "snapshot"
+        if tp == 0:
+            n = trans.get(u, {}).get("msgs") or r.get("msgs_sampled")
+            flags.append(f"从不公开报价（{n} 条消息 0 条带价）")
+
+        if out_by_seller.get(u):
+            o = out_by_seller[u][0]
+            flags.append(f"报价低到不可能：{o['category']} ¥{o['cny']}（同品类中位见基线）")
+
+        days = r.get("days_since_last_msg")
+        if days is not None and days > 60:
+            flags.append(f"沉寂 {days} 天")
+
+        # 分档：D 是一票否决项，其余按证据强度递降
+        hard = any(k in " ".join(flags) for k in
+                   ("已消失", "整片删除", "钓鱼", "被指认", "同组", "官方标记"))
+        if hard:
+            tier = "D"
+        elif not r.get("alive"):
+            tier = "D"
+        elif (spam and spam >= 5) or tp == 0 or (days or 0) > 60 or out_by_seller.get(u):
+            tier = "C"
+        elif days is not None and days <= 14 and tp:
+            # A 档要求同时满足：近两周还在、确实公开报价、且上面一条红旗都没有。
+            # 注意 tp 为 None（既无语料也无快照样本）不算满足 —— 但也不扣分，
+            # 只是拿不到 A，并在 confidence 里标出来。
+            tier = "A"
+        else:
+            tier = "B"
+
+        # 市场级冻结：全市场掉链子时 A 档一律降 B
+        if regime >= 2 and tier == "A":
+            tier = "B"
+            flags.append("市场级事件进行中，A 档强制降档")
+
+        results.append({
+            "handle": r["username"], "tier": tier, "tier_definition": TIER_DEF[tier],
+            "tier_20260429": r.get("tier_20260429"),
+            "dimensions": {
+                "alive": r.get("alive"), "recency_days": days,
+                "history_wiped": bool(r.get("history_wiped")),
+                "spam_ratio": spam, "price_transparency": tp,
+                "price_transparency_source": tp_src,
+                "negative_hits": (hit or {}).get("total", 0),
+                "aliases": mates, "domains": r.get("domains") or [],
+            },
+            "red_flags": flags, "evidence": ev,
+            "market_regime": regime,
+            # 证据齐 → high；关键维度缺数据 → low，别让读者把"没查到"读成"没问题"
+            "confidence": ("high" if ev else "medium") if tp is not None else "low",
+            "disclaimer": DISCLAIMER,
+        })
+
+    order = {"A": 0, "B": 1, "C": 2, "D": 3}
+    results.sort(key=lambda x: (order[x["tier"]], x["handle"].lower()))
+    return {"generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "market_regime": regime, "disclaimer": DISCLAIMER, "sellers": results}
+
+
 def load_jsonl(p: Path) -> dict:
     return {json.loads(l)["username"]: json.loads(l) for l in p.read_text().splitlines() if l.strip()}
 
@@ -740,9 +879,29 @@ def main() -> None:
     ap.add_argument("--since-days", type=int, default=120, help="只看最近多少天（默认 120）")
     ap.add_argument("--dump-urls", action="store_true", help="抓带链接消息的全文语料")
     ap.add_argument("--prices", nargs="+", metavar="语料", help="按品类算价格基线并标出离群低价")
+    ap.add_argument("--report", action="store_true", help="合成分档结论（需 --snapshot 等输入）")
+    for a in ("snapshot", "negative-in", "clusters-in", "frequency-in", "prices-in"):
+        ap.add_argument(f"--{a}", type=Path)
     args = ap.parse_args()
 
     sources_ = [c.strip() for c in args.source_chats.split(",") if c.strip()]
+    if args.report:
+        rep = build_report(args.snapshot, args.negative_in, args.clusters_in,
+                           args.frequency_in, args.prices_in)
+        cur = None
+        for s_ in rep["sellers"]:
+            if s_["tier"] != cur:
+                cur = s_["tier"]
+                print(f"\n━━ {cur} 档 —— {s_['tier_definition']}")
+            was = s_.get("tier_20260429")
+            move = "" if was == s_["tier"] else f"  （4-29 是 {was} 档）"
+            print(f"  @{s_['handle']}{move}")
+            for f in s_["red_flags"][:4]:
+                print(f"      · {f}")
+        if args.out:
+            args.out.write_text(json.dumps(rep, ensure_ascii=False, indent=1))
+            print(f"\n写入 {args.out}")
+        return
     if args.prices:
         rep = price_report(args.prices)
         print(f"{'品类':<14}{'样本':>6}{'中位(¥)':>10}{'MAD':>8}{'低价红线':>10}")
