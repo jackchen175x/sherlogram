@@ -340,10 +340,21 @@ def format_entity(entity) -> Dict[str, Any]:
             name_parts.append(entity.last_name)
         result["name"] = " ".join(name_parts)
         result["type"] = "user"
-        if hasattr(entity, "username") and entity.username:
-            result["username"] = entity.username
         if hasattr(entity, "phone") and entity.phone:
             result["phone"] = entity.phone
+
+    # username 对 User/Chat/Channel 统一输出。以前它写在 user 分支里，导致
+    # search_public_chats 找到的频道只有 id/name/type —— 拿不到 @username
+    # 就无法 resolve、无法 get_history，深挖在第一跳就断了。
+    username = getattr(entity, "username", None)
+    if username:
+        result["username"] = username
+
+    # 官方信任标记：高精度、低召回（实测大量骗子号 scam 仍为 False），
+    # 只在为 True 时输出，避免模型把 False 读成"已核验安全"。
+    for flag in ("scam", "fake", "restricted", "verified"):
+        if getattr(entity, flag, False):
+            result[flag] = True
 
     return result
 
@@ -1204,6 +1215,7 @@ async def list_messages(
     search_query: str = None,
     from_date: str = None,
     to_date: str = None,
+    from_user: Union[int, str] = None,
 ) -> str:
     """
     Retrieve messages with optional filters.
@@ -1212,6 +1224,10 @@ async def list_messages(
         chat_id: The ID or username of the chat to get messages from.
         limit: Maximum number of messages to retrieve.
         search_query: Filter messages containing this text.
+        from_user: Only messages sent by this user/channel (ID or @username).
+            Use this to aggregate one seller's posts inside a busy group —
+            searching for their @handle does NOT work, because their own ads
+            rarely contain it.
         from_date: Filter messages starting from this date (format: YYYY-MM-DD).
         to_date: Filter messages until this date (format: YYYY-MM-DD).
     """
@@ -1255,6 +1271,10 @@ async def list_messages(
 
         # Prepare filter parameters
         params = {}
+        if from_user:
+            # 走 resolve_entity 而不是直接透传：它带进程内缓存，批量按卖家聚合时
+            # 不会对同一个 handle 反复发 ResolveUsernameRequest（该请求是已知的封号源）。
+            params["from_user"] = await resolve_entity(from_user)
         if search_query:
             # IMPORTANT: Do not combine offset_date with search.
             # Use server-side search alone, then enforce date bounds client-side.
@@ -1277,7 +1297,7 @@ async def list_messages(
                 if from_date_obj:
                     # Walk forward from start date (oldest -> newest)
                     async for msg in client.iter_messages(
-                        entity, offset_date=from_date_obj, reverse=True
+                        entity, offset_date=from_date_obj, reverse=True, **params
                     ):
                         if to_date_obj and msg.date > to_date_obj:
                             break
@@ -1292,6 +1312,7 @@ async def list_messages(
                         # offset_date is exclusive; +1µs makes to_date inclusive
                         entity,
                         offset_date=to_date_obj + timedelta(microseconds=1),
+                        **params,
                     ):
                         messages.append(msg)
                         if len(messages) >= limit:
@@ -4249,6 +4270,18 @@ async def get_user_full_info(user_id: Union[int, str]) -> str:
         # Get full user info (bio, common chats, etc.)
         try:
             full = await client(functions.users.GetFullUserRequest(id=entity))
+            # 上面那批 flag 读的是 _entity_cache 里的 entity，而该缓存没有 TTL、
+            # 进程能活几天，scam/fake 可能是过期值。GetFullUserRequest 的响应里
+            # 本来就带回了新鲜的 User 对象（.users），之前被整个丢掉了 —— 用它覆盖，
+            # 零额外 API 调用，也不必给另外 ~60 个只要 id/access_hash 的调用点加 TTL。
+            fresh = next(
+                (u for u in getattr(full, "users", []) if u.id == entity.id), None
+            )
+            if fresh is not None:
+                for flag in ("verified", "restricted", "scam", "fake", "premium"):
+                    info[flag] = getattr(fresh, flag, False)
+                if getattr(fresh, "username", None):
+                    info["username"] = fresh.username
             if hasattr(full, "full_user"):
                 fu = full.full_user
                 info["bio"] = getattr(fu, "about", None) or ""
