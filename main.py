@@ -490,27 +490,44 @@ def get_sender_name(message) -> str:
         return "Unknown"
 
 
-def get_forward_info(message) -> str:
-    """Helper function to extract forwarded-from information from a message."""
-    fwd = getattr(message, "fwd_from", None)
-    if not fwd:
-        return ""
+def get_provenance_info(message) -> str:
+    """这条消息是怎么来的：转发自哪、原帖多久之前、是否被编辑过、是否机器人代发。
 
+    三种手法此前完全不可见，而它们正是"刷屏复制文案但没有真实反馈"的具体形态：
+      · 把三个月前的老帖 edit 成新价格 —— msg.date 还是旧的，只有 edit_date 会暴露
+      · 转发一条 90 天前的老广告冒充今日现货 —— msg.date 是今天，fwd.date 才是真相
+      · via_bot 说明是机器人批量代发，不是真人报价
+    """
     parts = []
-    # Original sender info
-    if fwd.from_id:
-        peer_id = utils.get_peer_id(fwd.from_id)
-        parts.append(f"fwd_from_id:{peer_id}")
-    if getattr(fwd, "from_name", None):
-        parts.append(f"fwd_from_name:{fwd.from_name}")
-    # Original channel post info
-    if getattr(fwd, "channel_post", None):
-        parts.append(f"fwd_channel_post:{fwd.channel_post}")
-    # Post author (signature in channel)
-    if getattr(fwd, "post_author", None):
-        parts.append(f"fwd_author:{fwd.post_author}")
 
-    return f" | forwarded=[{', '.join(parts)}]" if parts else ""
+    fwd = getattr(message, "fwd_from", None)
+    if fwd:
+        if fwd.from_id:
+            parts.append(f"fwd_from_id:{utils.get_peer_id(fwd.from_id)}")
+        if getattr(fwd, "from_name", None):
+            parts.append(f"fwd_from_name:{fwd.from_name}")
+        if getattr(fwd, "channel_post", None):
+            parts.append(f"fwd_channel_post:{fwd.channel_post}")
+        if getattr(fwd, "post_author", None):
+            parts.append(f"fwd_author:{fwd.post_author}")
+        # 原帖发布时间，以及它比这次转发早了多少天
+        fwd_date = getattr(fwd, "date", None)
+        if fwd_date:
+            parts.append(f"fwd_date:{fwd_date:%Y-%m-%d}")
+            msg_date = getattr(message, "date", None)
+            if msg_date:
+                age = (msg_date - fwd_date).days
+                if age >= 1:
+                    parts.append(f"fwd_age_days:{age}")
+
+    edited = getattr(message, "edit_date", None)
+    if edited:
+        parts.append(f"edited:{edited:%Y-%m-%d}")
+
+    if getattr(message, "via_bot_id", None):
+        parts.append(f"via_bot:{message.via_bot_id}")
+
+    return f" | provenance=[{', '.join(parts)}]" if parts else ""
 
 
 def get_engagement_info(message) -> str:
@@ -848,7 +865,7 @@ async def get_messages(chat_id: Union[int, str], page: int = 1, page_size: int =
                 reply_info = f" | reply to {msg.reply_to.reply_to_msg_id}"
 
             engagement_info = get_engagement_info(msg)
-            forward_info = get_forward_info(msg)
+            forward_info = get_provenance_info(msg)
             safe_text = (msg.message or "").replace("\n", "\\n")
 
             lines.append(
@@ -1331,13 +1348,13 @@ async def list_messages(
                 reply_info = f" | reply to {msg.reply_to.reply_to_msg_id}"
 
             engagement_info = get_engagement_info(msg)
-            forward_info = get_forward_info(msg)
+            forward_info = get_provenance_info(msg)
 
             lines.append(
                 f"ID: {msg.id} | {sender_name} | Date: {msg.date}{reply_info}{forward_info}{engagement_info} | Message: {message_text}"
             )
 
-        return "\n".join(lines)
+        return "\n".join(lines) + _clues_tail(messages)
     except Exception as e:
         return log_and_format_error("list_messages", e, chat_id=chat_id)
 
@@ -1558,6 +1575,34 @@ async def get_chat(chat_id: Union[int, str]) -> str:
             except Exception as pe:
                 result.append(f"Participants: Error fetching ({pe})")
 
+            flags = [f for f in ("scam", "fake", "restricted", "verified")
+                     if getattr(entity, f, False)]
+            if flags:
+                result.append(f"Flags: {', '.join(flags)}")
+
+            # 结构不透明度：以下每一项都是卖家主动关闭一条核查路径。
+            # 「卖家让你查不了」这个行为本身，比任何官方标记都更能说明问题 ——
+            # 而在此之前，一个三重不透明的卖货群和一个全开放群在输出里毫无差别。
+            opacity = []
+            if getattr(entity, "noforwards", False):
+                opacity.append("禁止转发/截图外传（你无法把证据转给曝光频道）")
+            try:
+                full_chat = (await client(functions.channels.GetFullChannelRequest(entity))).full_chat
+                if getattr(full_chat, "hidden_prehistory", False):
+                    opacity.append("新成员看不到入群前历史（旧差评对新买家不可见）")
+                if getattr(full_chat, "participants_hidden", False):
+                    opacity.append("成员列表已隐藏")
+                elif not getattr(full_chat, "can_view_participants", True):
+                    opacity.append("不可查看成员（无法核对成员真实性）")
+                if getattr(entity, "broadcast", False) and not getattr(
+                    full_chat, "linked_chat_id", None
+                ):
+                    opacity.append("没有评论区 —— 不是「零差评」，是结构上不可能有公开差评")
+            except Exception as fe:
+                logger.warning(f"GetFullChannel failed for {chat_id}: {fe}")
+            if opacity:
+                result.append(f"Opacity ({len(opacity)}): " + "; ".join(opacity))
+
         elif is_user:
             name = f"{entity.first_name}"
             if entity.last_name:
@@ -1575,16 +1620,15 @@ async def get_chat(chat_id: Union[int, str]) -> str:
         # dialog list.  ``offset_peer`` is a pagination cursor, not a filter;
         # using it with ``limit=1`` can return the next unrelated dialog.
         try:
-            entity_peer_id = utils.get_peer_id(entity)
-            dialogs = await client.get_dialogs()
-            dialog = next(
-                (
-                    item
-                    for item in dialogs
-                    if utils.get_peer_id(item.entity) == entity_peer_id
-                ),
-                None,
+            # 单点查询，而不是拉回全部会话再过滤 —— get_chat 是调研里最高频的动词，
+            # 每次都全量扫一遍会话列表是白花的 RPC。
+            peer = await resolve_input_entity(chat_id)
+            res = await client(
+                functions.messages.GetPeerDialogsRequest(
+                    peers=[types.InputDialogPeer(peer=peer)]
+                )
             )
+            dialog = res.dialogs[0] if getattr(res, "dialogs", None) else None
             if dialog is not None:
                 result.append(f"Unread Messages: {dialog.unread_count}")
         except Exception as diag_ex:
@@ -3521,7 +3565,7 @@ async def search_messages(chat_id: Union[int, str], query: str, limit: int = 20)
             reply_info = ""
             if msg.reply_to and msg.reply_to.reply_to_msg_id:
                 reply_info = f" | reply to {msg.reply_to.reply_to_msg_id}"
-            forward_info = get_forward_info(msg)
+            forward_info = get_provenance_info(msg)
             lines.append(
                 f"ID: {msg.id} | {sender_name} | Date: {msg.date}{reply_info}{forward_info} | Message: {msg.message}"
             )
@@ -3564,13 +3608,13 @@ async def search_global(query: str, page: int = 1, page_size: int = 20) -> str:
             chat_username = getattr(chat, "username", None)
             chat_label = f"{chat_name} (@{chat_username})" if chat_username else chat_name
             sender_name = get_sender_name(msg)
-            forward_info = get_forward_info(msg)
+            forward_info = get_provenance_info(msg)
             lines.append(
                 f"Chat: {chat_label} | ID: {msg.id} | {sender_name} | "
                 f"Date: {msg.date}{forward_info} | Message: {msg.message}"
             )
 
-        return "\n".join(lines)
+        return "\n".join(lines) + _clues_tail(messages)
     except Exception as e:
         return log_and_format_error(
             "search_global", e, query=query, page=page, page_size=page_size
@@ -3592,6 +3636,28 @@ def _format_public_post_search_quota(search_flood: Any) -> Dict[str, Any]:
         "wait_till_iso": wait_till_iso,
         "stars_required": getattr(search_flood, "stars_amount", 0),
     }
+
+
+def _clues_tail(messages) -> str:
+    """把这批消息里高频出现的 @账号 / 域名 / 话题附在结果末尾。
+
+    这是 corpus-first 的落地形态：调查的下一跳不该靠人再读一遍消息去捞，
+    应该由上一次调用直接指出来。此前全项目只有 search_public_posts 做了这件事，
+    是 98 个工具里唯一在解决"深挖"而不是"调用"的地方。
+
+    只输出出现 ≥2 次的，否则等于给每次调用平白加一段上下文。
+    """
+    clues = _extract_public_post_clues(
+        [{"text": getattr(msg, "message", "") or ""} for msg in messages]
+    )
+    parts = []
+    for label, key in (("提及", "mentions"), ("域名", "linked_domains"), ("话题", "hashtags")):
+        top = [x for x in clues[key] if x["count"] >= 2][:8]
+        if top:
+            parts.append(f"{label}: " + ", ".join(f"{x['value']}×{x['count']}" for x in top))
+    if not parts:
+        return ""
+    return "\n\n--- 线索（本批消息里的高频项，可作为下一跳）---\n" + "\n".join(parts)
 
 
 def _extract_public_post_clues(posts: List[Dict[str, Any]]) -> Dict[str, Any]:

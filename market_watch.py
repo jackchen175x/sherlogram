@@ -184,6 +184,54 @@ async def check_history(row: dict, t: dict) -> None:
             row["history_wiped"] = True
 
 
+def classify_domains(hosts: set) -> dict:
+    """卡网域名分类。「打不开」必须区分成两件事：
+
+      · 服务器挂了 / 域名过期  →  这家可能只是不做了
+      · 被 Cloudflare 判定为钓鱼  →  这是第三方权威给出的诈骗认定
+
+    实测教训：pay.ldxp.cn 正常返回「链动小铺」，而 play.ldxp.demo-fake.cn、pay.ldxp-demo.me
+    等 5 个仿冒域名全部返回 Cloudflare 的 Suspected Phishing 拦截页 —— 一字之差。
+    只按"能不能打开"记分会把这两类混为一谈，而它们的含义正好相反。
+    """
+    import httpx
+
+    # 必须带浏览器 UA：实测 pay.ldxp.cn 对默认的 python-httpx UA 返回 403，
+    # 换成浏览器 UA 才返回真正的「链动小铺」首页。不带 UA 会把正规平台误判成挂了。
+    UA = (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    )
+    out = {}
+    for host in sorted(hosts):
+        rec = {"host": host}
+        try:
+            with httpx.Client(
+                timeout=12, follow_redirects=True, headers={"User-Agent": UA}
+            ) as c:
+                r = c.get(f"https://{host}/")
+            body = r.text[:4000]
+            mt = re.search(r"<title[^>]*>(.*?)</title>", body, re.I | re.S)
+            title = re.sub(r"\s+", " ", mt.group(1)).strip()[:60] if mt else ""
+            rec["status"] = r.status_code
+            rec["title"] = title
+            if "suspected phishing" in body.lower():
+                rec["verdict"] = "cloudflare_phishing"
+            elif r.status_code < 400:
+                rec["verdict"] = "reachable"
+            else:
+                rec["verdict"] = f"http_{r.status_code}"
+        except Exception as e:
+            # 刻意不叫 "unreachable" —— 那是在对目标站点下结论，而这里发生的
+            # 很可能是本机的事：这台机器走 TUN 透明代理，实测同一批域名早上
+            # 还能取回 Cloudflare 的钓鱼拦截页，几小时后 curl 和 httpx 都拿不到了。
+            # 探测失败不是证据，别让它反过来影响对卖家的判断。
+            rec["verdict"] = "probe_failed"
+            rec["error"] = type(e).__name__
+        out[host] = rec
+    return out
+
+
 class FloodStop(Exception):
     """撞到 FloodWait 就整轮停下 —— 继续打只会把等待时间叠成几十小时。"""
 
@@ -224,11 +272,34 @@ async def scan(
         if i < len(targets):
             await asyncio.sleep(delay)  # ResolveUsername 是已知封号源，别连打
 
+    await m.client.disconnect()
+
+    # 域名去重后统一探测：17 个目标各查各的会有大量重复请求
+    hosts = {d for r in rows for d in (r.get("domains") or [])}
+    if hosts:
+        print(f"\n探测 {len(hosts)} 个卡网域名…")
+        verdicts = classify_domains(hosts)
+        phishing = []
+        for r in rows:
+            checks = [verdicts[d] for d in (r.get("domains") or []) if d in verdicts]
+            if checks:
+                r["domain_checks"] = checks
+                bad = [c["host"] for c in checks if c["verdict"] == "cloudflare_phishing"]
+                if bad:
+                    r["phishing_domains"] = bad
+                    phishing.append((r["username"], bad))
+        for host, v in sorted(verdicts.items()):
+            mark = {"cloudflare_phishing": "🚩钓鱼", "reachable": "·", "probe_failed": "○"}.get(v["verdict"], "?")
+            print(f"  {mark} {host:<34} {v['verdict']:<20} {v.get('title', '')[:30]}")
+        if phishing:
+            print("\n  ⚠️ 以下对象的卡网被 Cloudflare 判定为钓鱼：")
+            for u, bad in phishing:
+                print(f"     @{u} → {', '.join(bad)}")
+
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w") as f:
         for r in rows:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
-    await m.client.disconnect()
 
     gone = sum(1 for r in rows if r["status"] == "username_gone")
     print(f"\n写入 {out_path}")
