@@ -108,7 +108,9 @@ else:
 
 # Setup robust logging with both file and console output
 logger = logging.getLogger("telegram_mcp")
-_log_level = getattr(logging, os.getenv("LOG_LEVEL", "ERROR").upper(), logging.ERROR)
+# 默认 WARNING 而非 ERROR：重连、限速、心跳恢复都是 warning 级，
+# 之前它们永远不落盘，"到底被限速过几次"是纯黑箱 —— 而这个日志是唯一故障线索。
+_log_level = getattr(logging, os.getenv("LOG_LEVEL", "WARNING").upper(), logging.WARNING)
 logger.setLevel(_log_level)
 
 # Create console handler
@@ -117,11 +119,13 @@ console_handler.setLevel(_log_level)
 
 # Create file handler with absolute path
 script_dir = os.path.dirname(os.path.abspath(__file__))
-log_file_path = os.path.join(script_dir, "mcp_errors.log")
+# 可用 TG_MCP_LOG 改写路径：跑测试时指向别处，否则测试噪音会淹掉真实故障线索
+# （实测该日志 65% 的行来自测试里的 dummy_function 和缺 transport 的告警）
+log_file_path = os.getenv("TG_MCP_LOG", os.path.join(script_dir, "mcp_errors.log"))
 
 try:
     file_handler = logging.FileHandler(log_file_path, mode="a")  # Append mode
-    file_handler.setLevel(logging.ERROR)
+    file_handler.setLevel(logging.WARNING)
 
     # Create formatters
     # Console formatter remains in the old format
@@ -221,7 +225,9 @@ def log_and_format_error(
                     break
 
         prefix_str = prefix.value if isinstance(prefix, ErrorCategory) else (prefix or "GEN")
-        error_code = f"{prefix_str}-ERR-{abs(hash(function_name)) % 1000:03d}"
+        # 曾经用 abs(hash(function_name)) % 1000 —— Python 的 str hash 每进程加盐，
+        # 同一个函数每次重启都是不同数字，日志里的 GEN-ERR-062 事后根本复现不出来。
+        error_code = f"{prefix_str}-ERR-{function_name}"
 
     # Format the additional context parameters
     context = ", ".join(f"{k}={v}" for k, v in kwargs.items())
@@ -229,16 +235,22 @@ def log_and_format_error(
     # Log the full technical error
     logger.error(f"Error in {function_name} ({context}) - Code: {error_code}", exc_info=True)
 
-    # Return a user-friendly message
+    # 以异常抛出，而不是 return 一段字符串。
+    # 返回字符串时 MCP 协议层的 isError 是 False，agent 在批量调查里会把
+    # "连接断了" 当成 "这个卖家没有负面记录" 一样的无害空结果顺手略过 ——
+    # 对一个用来判断卖家可不可信的工具，这是最贵的失败模式。
+    # 抛异常后 FastMCP 会置 isError=True 并保留原文。117 处调用点全在 return
+    # 位置，所以改这一处即可全部翻转，调用点一行不动。
     if user_message:
-        return user_message
-
-    # 尝试分类错误，给出更精准的提示
-    classified = classify_error(error)
-    if classified:
-        return f"{classified} (code: {error_code})"
-
-    return f"An error occurred (code: {error_code}). Check mcp_errors.log for details."
+        msg = user_message
+    else:
+        classified = classify_error(error)
+        msg = (
+            f"{classified} (code: {error_code})"
+            if classified
+            else f"An error occurred (code: {error_code}). Check mcp_errors.log for details."
+        )
+    raise RuntimeError(msg) from error
 
 
 def validate_id(*param_names_to_validate):
@@ -375,19 +387,6 @@ async def ensure_connected(max_retries: int = 3, delay: float = 2.0):
             if attempt < max_retries - 1:
                 await asyncio.sleep(delay * (attempt + 1))
     raise ConnectionError("Failed to reconnect to Telegram after all retries")
-
-
-async def safe_call(coro, timeout: float = 30.0):
-    """执行 Telegram API 调用，带连接检查和超时保护"""
-    await ensure_connected()
-    try:
-        return await asyncio.wait_for(coro, timeout=timeout)
-    except asyncio.TimeoutError:
-        raise RuntimeError(f"Telegram API request timed out after {timeout}s")
-    except ConnectionError:
-        # 连接断了，尝试重连后重试一次
-        await ensure_connected()
-        return await asyncio.wait_for(coro, timeout=timeout)
 
 
 def classify_error(e: Exception) -> str:
@@ -2248,19 +2247,77 @@ async def leave_chat(chat_id: Union[int, str]) -> str:
     annotations=ToolAnnotations(title="Get Participants", openWorldHint=True, readOnlyHint=True)
 )
 @validate_id("chat_id")
-async def get_participants(chat_id: Union[int, str]) -> str:
+async def get_participants(
+    chat_id: Union[int, str],
+    limit: int = 100,
+    search: str = None,
+    role: str = None,
+) -> str:
     """
-    List all participants in a group or channel.
+    List participants in a group or channel.
+
     Args:
         chat_id: The group or channel ID or username.
+        limit: Max participants to return (default 100). Large groups can hold
+            tens of thousands — fetching all of them will blow up the context.
+        search: Only participants whose name/username matches this text.
+        role: One of "admins", "bots", "banned", "recent". Omit for all.
+            "admins" answers a question plain membership cannot: is this seller
+            the one running the group, or just someone spamming in it?
     """
     try:
-        participants = await client.get_participants(chat_id)
-        lines = [
-            f"ID: {p.id}, Name: {getattr(p, 'first_name', '')} {getattr(p, 'last_name', '')}"
-            for p in participants
-        ]
-        return "\n".join(lines)
+        entity = await resolve_entity(chat_id)
+        filters = {
+            "admins": types.ChannelParticipantsAdmins(),
+            "bots": types.ChannelParticipantsBots(),
+            "banned": types.ChannelParticipantsKicked(q=""),
+            "recent": types.ChannelParticipantsRecent(),
+        }
+        if role and role not in filters:
+            return f"Unknown role {role!r}. Use one of: {', '.join(filters)}."
+
+        kwargs = {"limit": limit}
+        if search:
+            kwargs["search"] = search
+        if role:
+            kwargs["filter"] = filters[role]
+
+        participants = await client.get_participants(entity, **kwargs)
+
+        def role_of(p):
+            part = getattr(p, "participant", None)
+            if isinstance(part, types.ChannelParticipantCreator):
+                return "creator"
+            if isinstance(part, types.ChannelParticipantAdmin):
+                return "admin"
+            if isinstance(part, types.ChannelParticipantBanned):
+                return "banned"
+            return "member"
+
+        out = []
+        for p in participants:
+            row = {
+                "id": p.id,
+                "name": " ".join(
+                    x for x in (getattr(p, "first_name", ""), getattr(p, "last_name", "")) if x
+                ).strip(),
+                # username 是把群成员和消息里的 @卖家 对上号的唯一钥匙，旧实现整个丢了
+                "username": getattr(p, "username", None),
+                "role": role_of(p),
+            }
+            for flag in ("bot", "premium", "scam", "fake"):
+                if getattr(p, flag, False):
+                    row[flag] = True
+            joined = getattr(getattr(p, "participant", None), "date", None)
+            if joined:
+                row["joined"] = joined.strftime("%Y-%m-%d")
+            out.append(row)
+
+        return json.dumps(
+            {"count": len(out), "limit": limit, "participants": out},
+            ensure_ascii=False,
+            indent=2,
+        )
     except Exception as e:
         return log_and_format_error("get_participants", e, chat_id=chat_id)
 

@@ -57,32 +57,38 @@ async def test_valid_list_of_ids():
     assert kwargs["user_ids"] == [123, 456, "@test_user"]
 
 
+# 校验失败以异常抛出（而非 return 字符串），MCP 协议层才会置 isError=True。
+# 否则 agent 在批量调查里可能把错误当成一次无害的空结果略过。
 @pytest.mark.asyncio
 async def test_invalid_float_id():
-    result = await dummy_function(user_id=123.45)
-    assert "Invalid user_id" in result
-    assert "Type must be an integer or a string" in result
+    with pytest.raises(RuntimeError) as exc:
+        await dummy_function(user_id=123.45)
+    assert "Invalid user_id" in str(exc.value)
+    assert "Type must be an integer or a string" in str(exc.value)
 
 
 @pytest.mark.asyncio
 async def test_invalid_string_id():
-    result = await dummy_function(user_id="inv")  # too short
-    assert "Invalid user_id" in result
-    assert "Must be a valid integer ID, or a username string" in result
+    with pytest.raises(RuntimeError) as exc:
+        await dummy_function(user_id="inv")  # too short
+    assert "Invalid user_id" in str(exc.value)
+    assert "Must be a valid integer ID, or a username string" in str(exc.value)
 
 
 @pytest.mark.asyncio
 async def test_integer_out_of_range():
-    result = await dummy_function(user_id=2**64)
-    assert "Invalid user_id" in result
-    assert "out of the valid integer range" in result
+    with pytest.raises(RuntimeError) as exc:
+        await dummy_function(user_id=2**64)
+    assert "Invalid user_id" in str(exc.value)
+    assert "out of the valid integer range" in str(exc.value)
 
 
 @pytest.mark.asyncio
 async def test_invalid_item_in_list():
-    result = await dummy_function(user_ids=[123, "456", 123.45])
-    assert "Invalid user_ids" in result
-    assert "Type must be an integer or a string" in result
+    with pytest.raises(RuntimeError) as exc:
+        await dummy_function(user_ids=[123, "456", 123.45])
+    assert "Invalid user_ids" in str(exc.value)
+    assert "Type must be an integer or a string" in str(exc.value)
 
 
 @pytest.mark.asyncio
