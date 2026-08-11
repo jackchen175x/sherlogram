@@ -237,6 +237,109 @@ async def scan(
         print(f"⚠️ 本轮因 FloodWait({stopped}s) 提前结束，剩余目标未检查")
 
 
+# 论坛转发频道的固定格式，例如「forum_user (@FORUM_USER) 在 <标题> 中发帖」
+RELAY_RE = re.compile(r"@[A-Za-z0-9_]{3,32}\)?\s*在\s*.{0,80}?中发帖", re.S)
+# 提及与关键词相隔多少字符以内才算"可能在说他"
+NEAR_CHARS = 25
+
+# Jack 在《卖家靠谱度核查》里手工用的负面词，原样沿用以保持结论可比
+NEGATIVE_WORDS = [
+    "骗子", "被骗", "曝光", "跑路", "拉黑", "不稳", "掉订阅",
+    "无质保", "不到账", "退款", "维权", "失联", "假的", "垃圾",
+]
+
+
+async def scan_corpus(
+    out_path: Path, source_chats: list, per_word: int, since_days: int, delay: float
+) -> None:
+    """corpus-first：搜负面词拿回语料，再从语料里反查被指认的 handle。
+
+    为什么不能反过来（handle-first）：实测搜 "demo_seller1" 在他刷屏最多的群里返回 0 条 ——
+    那 332 条是他自己发的广告，而广告里不含自己的 handle。全文检索索引的是正文，
+    所以"搜卖家名字数负面词"这个直觉做法，对数据主体一律返回空。
+    反过来搜"骗子"，被指认的人自然会出现在正文里（"@xxx 这是骗子，大家不要上当"）。
+    """
+    from collections import Counter, defaultdict
+
+    await m.client.connect()
+    if not await m.client.is_user_authorized():
+        sys.exit("session 未授权")
+
+    cutoff = datetime.now(timezone.utc).timestamp() - since_days * 86400
+    chats = []
+    for c in source_chats:
+        try:
+            chats.append((c, await m.resolve_entity(c)))
+        except Exception as e:
+            print(f"  ! {c} 解析失败: {type(e).__name__}")
+    print(f"语料群 {len(chats)}/{len(source_chats)} 可用，负面词 {len(NEGATIVE_WORDS)} 个\n")
+
+    records, accused = [], defaultdict(Counter)
+    for name, chat in chats:
+        for word in NEGATIVE_WORDS:
+            n = 0
+            try:
+                async for msg in m.client.iter_messages(chat, search=word, limit=per_word):
+                    if not msg.date or msg.date.timestamp() < cutoff:
+                        continue
+                    text = msg.message or ""
+                    if RELAY_RE.search(text):
+                        # 论坛转发频道的格式是「@作者 在 <标题> 中发帖」。这里的 @ 是
+                        # 发帖人，不是被指认者；而关键词往往命中的是标题里的正常讨论
+                        # （"Gemini 也不是一无是处…又快又稳"、"eSIM 洋垃圾"）。
+                        # 不剔除的话，高产网友会排到疑似骗子榜首 —— 实测就是如此。
+                        continue
+                    mentions = {
+                        x.casefold() for x in re.findall(r"@([A-Za-z0-9_]{5,32})", text)
+                    }
+                    # 只有和关键词靠得近的提及才可能是"被指认的人"。远处的 @ 多半无关。
+                    near = set()
+                    kpos = [mm.start() for mm in re.finditer(re.escape(word), text)]
+                    for mth in re.finditer(r"@([A-Za-z0-9_]{5,32})", text):
+                        if any(abs(mth.start() - k) <= NEAR_CHARS for k in kpos):
+                            near.add(mth.group(1).casefold())
+                    records.append({
+                        "keyword": word,
+                        "chat": name,
+                        "message_id": msg.id,
+                        "date": msg.date.strftime("%Y-%m-%d"),
+                        "sender_id": msg.sender_id,
+                        "mentions": sorted(mentions),
+                        "near_mentions": sorted(near),
+                        "text": text[:400],
+                    })
+                    # 只把"近距离共现"计入嫌疑，且仍需人工/模型判读：实测近距离里
+                    # 也混着"@你 买什么被骗了"（问受害者）和"冒充号，认准 @我"（卖家澄清）。
+                    for h in near:
+                        accused[h][word] += 1
+                    n += 1
+            except errors.FloodWaitError as e:
+                print(f"  !! FloodWait {e.seconds}s，停止")
+                raise FloodStop(e.seconds) from e
+            except Exception:
+                continue
+            if n:
+                print(f"  {name:<22} {word:<6} {n:>3} 条")
+            await asyncio.sleep(delay)
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "scanned_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "source_chats": [c for c, _ in chats],
+        "negative_words": NEGATIVE_WORDS,
+        "since_days": since_days,
+        "records": records,
+        "accused": {
+            h: {"total": sum(c.values()), "by_word": dict(c)}
+            for h, c in sorted(accused.items(), key=lambda x: -sum(x[1].values()))
+        },
+    }
+    out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=1))
+    await m.client.disconnect()
+    print(f"\n写入 {out_path}")
+    print(f"负面语料 {len(records)} 条，涉及 {len(accused)} 个被提及的 handle")
+
+
 def load_jsonl(p: Path) -> dict:
     return {json.loads(l)["username"]: json.loads(l) for l in p.read_text().splitlines() if l.strip()}
 
@@ -289,12 +392,25 @@ def main() -> None:
         help="逗号分隔的语料群：个人卖家的广告发在这里，不在与他的私聊里。"
         "默认取 4-29 扫描中线索量最大的几个，保证与那份基线可比。",
     )
+    ap.add_argument("--scan-corpus", action="store_true", help="搜负面词反查被指认的 handle")
+    ap.add_argument("--per-word", type=int, default=40, help="每个词每群最多取多少条（默认 40）")
+    ap.add_argument("--since-days", type=int, default=120, help="只看最近多少天（默认 120）")
     args = ap.parse_args()
 
-    if args.diff:
+    sources_ = [c.strip() for c in args.source_chats.split(",") if c.strip()]
+    if args.scan_corpus:
+        if not args.out:
+            ap.error("--scan-corpus 需要 --out")
+        try:
+            asyncio.run(
+                scan_corpus(args.out, sources_, args.per_word, args.since_days, args.delay)
+            )
+        except FloodStop as fs:
+            sys.exit(f"因 FloodWait({fs.seconds}s) 中止")
+    elif args.diff:
         diff(*args.diff)
     elif args.targets and args.out:
-        sources = [c.strip() for c in args.source_chats.split(",") if c.strip()]
+        sources = sources_
         asyncio.run(scan(args.targets, args.out, args.msg_limit, args.delay, sources))
     else:
         ap.error("要么给 --targets 和 --out，要么给 --diff")
