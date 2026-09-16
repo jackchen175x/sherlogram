@@ -21,6 +21,7 @@ and usernames (e.g., "@mychannel").
 
 import argparse
 import asyncio
+import getpass
 import io
 import os
 import sys
@@ -71,7 +72,7 @@ def _qr_login(
         client.disconnect()
         sys.exit(1)
     except errors.SessionPasswordNeededError:
-        pw = input("\nTwo-factor authentication enabled. Please enter your password: ")
+        pw = getpass.getpass("\nTwo-factor authentication enabled. Please enter your password (输入不显示): ")
         client.sign_in(password=pw)
 
 
@@ -97,7 +98,7 @@ def _phone_login(client: TelegramClient) -> None:
     try:
         client.sign_in(phone, code)
     except errors.SessionPasswordNeededError:
-        pw = input("Two-factor authentication enabled. Please enter your password: ")
+        pw = getpass.getpass("Two-factor authentication enabled. Please enter your password (输入不显示): ")
         client.sign_in(password=pw)
 
 
