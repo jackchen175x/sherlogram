@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- 全电脑共用的一份 Telegram 连接，各 Claude 窗口连 http://127.0.0.1:8799/mcp -->
+  <key>Label</key><string>com.example.tg-mcp</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/path/to/tg-mcp/.venv/bin/python</string>
+    <string>main.py</string>
+    <string>--http</string>
+    <string>/Users/you/Downloads</string>
+    <string>/Users/you/Desktop</string>
+    <string>/private/tmp</string>
+  </array>
+  <key>WorkingDirectory</key><string>/path/to/tg-mcp</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>30</integer>
+  <key>StandardOutPath</key><string>/path/to/tg-mcp/daemon.log</string>
+  <key>StandardErrorPath</key><string>/path/to/tg-mcp/daemon.log</string>
+</dict>
+</plist>

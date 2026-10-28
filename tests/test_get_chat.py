@@ -7,7 +7,7 @@ import pytest
 os.environ.setdefault("TELEGRAM_API_ID", "12345")
 os.environ.setdefault("TELEGRAM_API_HASH", "dummy_hash")
 
-import main
+from tg_mcp import chats
 
 
 class _FakeClient:
@@ -50,10 +50,10 @@ async def test_get_chat_does_not_treat_offset_dialog_as_target(monkeypatch):
         assert chat_id == 123
         return target
 
-    monkeypatch.setattr(main, "client", fake)
-    monkeypatch.setattr(main, "resolve_entity", fake_resolve_entity)
+    monkeypatch.setattr(chats, "client", fake)
+    monkeypatch.setattr(chats, "resolve_entity", fake_resolve_entity)
 
-    result = await main.get_chat(123)
+    result = await chats.get_chat(123)
 
     assert "actual target post" in result
     assert "private unrelated message" not in result

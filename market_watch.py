@@ -25,9 +25,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import main as m  # noqa: E402  复用已有的 client / resolve_entity / 线索抽取
+from telethon import errors, functions  # noqa: E402
 
-from telethon import errors  # noqa: E402
+from tg_mcp.app import client  # noqa: E402  复用常驻那套配置 / 登录凭证
+from tg_mcp.common import extract_public_post_clues, resolve_entity  # noqa: E402
 
 PRICE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(r|rmb|元|块|¥|刀|u|usd|美金)", re.I)
 
@@ -49,7 +50,7 @@ async def collect_user_posts(entity, source_chats: list, msg_limit: int) -> list
     posts = []
     for chat in source_chats:
         try:
-            got = await m.client.get_messages(chat, limit=msg_limit, from_user=entity)
+            got = await client.get_messages(chat, limit=msg_limit, from_user=entity)
         except Exception:
             continue  # 某个群读不了不该拖垮整个对象
         posts.extend(got)
@@ -74,8 +75,8 @@ async def check_one(t: dict, msg_limit: int, source_chats: list = ()) -> dict:
     #  2) 后者解析失败时会退回拉全量 dialogs，对十几个目标就是十几次全量拉取；
     #  3) 它的响应自带新鲜的 User/Channel 对象，信任标记不经过任何缓存。
     try:
-        resolved = await m.client(
-            m.functions.contacts.ResolveUsernameRequest(username=username)
+        resolved = await client(
+            functions.contacts.ResolveUsernameRequest(username=username)
         )
         found = list(resolved.users) + list(resolved.chats)
         if not found:
@@ -121,7 +122,7 @@ async def check_one(t: dict, msg_limit: int, source_chats: list = ()) -> dict:
             msgs = await collect_user_posts(entity, source_chats, msg_limit)
             row["sampled_from"] = "source_chats" if msgs else "source_chats(empty)"
         else:
-            msgs = await m.client.get_messages(entity, limit=msg_limit)
+            msgs = await client.get_messages(entity, limit=msg_limit)
             row["sampled_from"] = "own_channel"
     except errors.FloodWaitError as e:
         raise FloodStop(e.seconds) from e
@@ -136,7 +137,7 @@ async def check_one(t: dict, msg_limit: int, source_chats: list = ()) -> dict:
     if dates:
         row["days_since_last_msg"] = (datetime.now(timezone.utc) - max(dates)).days
 
-    clues = m._extract_public_post_clues([{"text": x} for x in texts])
+    clues = extract_public_post_clues([{"text": x} for x in texts])
     row["domains"] = [d["value"] for d in clues["linked_domains"][:10]]
     row["mentions"] = [x["value"] for x in clues["mentions"][:10]]
     seen, prices = set(), []
@@ -171,8 +172,8 @@ async def check_history(row: dict, t: dict) -> None:
         if not chat_name:
             continue
         try:
-            chat = await m.resolve_entity(chat_name)
-            got = await m.client.get_messages(chat, ids=ids)
+            chat = await resolve_entity(chat_name)
+            got = await client.get_messages(chat, ids=ids)
         except Exception:
             continue
         total += len(ids)
@@ -323,12 +324,12 @@ async def check_regime(source_chats: list, hours: int = 72) -> dict:
     hits, chats_hit = [], set()
     for name in source_chats:
         try:
-            ent = await m.resolve_entity(name)
+            ent = await resolve_entity(name)
         except Exception:
             continue
         for word in REGIME_WORDS:
             try:
-                async for msg in m.client.iter_messages(ent, search=word, limit=10):
+                async for msg in client.iter_messages(ent, search=word, limit=10):
                     if not msg.date or msg.date.timestamp() < cutoff:
                         break
                     text = msg.message or ""
@@ -430,15 +431,15 @@ async def scan(
 ) -> None:
     doc = json.loads(targets_path.read_text())
     targets = doc["targets"]
-    await m.client.connect()
-    if not await m.client.is_user_authorized():
+    await client.connect()
+    if not await client.is_user_authorized():
         sys.exit("session 未授权，先跑 session_string_generator.py")
 
     # 语料群解析一次，供所有 User 型目标复用（每个目标各解析一次是十几倍的浪费）
     resolved_sources = []
     for c in source_chats:
         try:
-            resolved_sources.append(await m.resolve_entity(c))
+            resolved_sources.append(await resolve_entity(c))
         except Exception as e:
             print(f"  ! 语料群 {c} 解析失败，跳过: {type(e).__name__}")
     if source_chats:
@@ -469,7 +470,7 @@ async def scan(
         for h in regime["hits"][:3]:
             print(f"     [{h['word']}] {h['date']} {h['chat']}: {h['text'][:60]}")
 
-    await m.client.disconnect()
+    await client.disconnect()
 
     # 域名去重后统一探测：17 个目标各查各的会有大量重复请求
     hosts = {d for r in rows for d in (r.get("domains") or [])}
@@ -529,15 +530,15 @@ async def scan_corpus(
     """
     from collections import Counter, defaultdict
 
-    await m.client.connect()
-    if not await m.client.is_user_authorized():
+    await client.connect()
+    if not await client.is_user_authorized():
         sys.exit("session 未授权")
 
     cutoff = datetime.now(timezone.utc).timestamp() - since_days * 86400
     chats = []
     for c in source_chats:
         try:
-            chats.append((c, await m.resolve_entity(c)))
+            chats.append((c, await resolve_entity(c)))
         except Exception as e:
             print(f"  ! {c} 解析失败: {type(e).__name__}")
     print(f"语料群 {len(chats)}/{len(source_chats)} 可用，负面词 {len(NEGATIVE_WORDS)} 个\n")
@@ -547,7 +548,7 @@ async def scan_corpus(
         for word in NEGATIVE_WORDS:
             n = 0
             try:
-                async for msg in m.client.iter_messages(chat, search=word, limit=per_word):
+                async for msg in client.iter_messages(chat, search=word, limit=per_word):
                     if not msg.date or msg.date.timestamp() < cutoff:
                         continue
                     text = msg.message or ""
@@ -603,7 +604,7 @@ async def scan_corpus(
         },
     }
     out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=1))
-    await m.client.disconnect()
+    await client.disconnect()
     print(f"\n写入 {out_path}")
     print(f"负面语料 {len(records)} 条，涉及 {len(accused)} 个被提及的 handle")
 
@@ -620,21 +621,21 @@ async def dump_urls(out_path: Path, source_chats: list, since_days: int, delay: 
     """
     from telethon.tl import types as tl_types
 
-    await m.client.connect()
-    if not await m.client.is_user_authorized():
+    await client.connect()
+    if not await client.is_user_authorized():
         sys.exit("session 未授权")
 
     cutoff = datetime.now(timezone.utc).timestamp() - since_days * 86400
     records, capped = [], []
     for name in source_chats:
         try:
-            ent = await m.resolve_entity(name)
+            ent = await resolve_entity(name)
         except Exception as e:
             print(f"  ! {name} 解析失败: {type(e).__name__}")
             continue
         n = 0
         try:
-            async for msg in m.client.iter_messages(
+            async for msg in client.iter_messages(
                 ent, filter=tl_types.InputMessagesFilterUrl()
             ):
                 if not msg.date or msg.date.timestamp() < cutoff:
@@ -676,7 +677,7 @@ async def dump_urls(out_path: Path, source_chats: list, since_days: int, delay: 
         "sale_records_count": len(records),
         "sale_records": records,
     }, ensure_ascii=False, indent=1))
-    await m.client.disconnect()
+    await client.disconnect()
     print(f"\n写入 {out_path}")
     print(f"共 {len(records)} 条，其中 {named} 条能拿到发送者 username")
     lens = sorted(len(r["text_snippet"]) for r in records) or [0]

@@ -3,10 +3,7 @@ import os
 
 os.environ["TELEGRAM_API_ID"] = "12345"
 os.environ["TELEGRAM_API_HASH"] = "dummy_hash"
-from main import validate_id, ValidationError, log_and_format_error
-from functools import wraps
-import asyncio
-from typing import Union, List, Optional
+from tg_mcp.common import validate_id
 
 
 # A simple async function to be decorated for testing
@@ -101,3 +98,9 @@ async def test_no_id_provided():
 async def test_none_id_provided():
     result, kwargs = await dummy_function(user_id=None)
     assert result == "success"
+
+
+@pytest.mark.asyncio
+async def test_me_is_allowed():
+    result, kwargs = await dummy_function(chat_id="me")
+    assert result == "success" and kwargs["chat_id"] == "me"
