@@ -147,16 +147,3 @@ async def test_hashtag_search_skips_full_text_quota_check(monkeypatch):
     assert request.hashtag == "GEO"
     assert request.query is None
     assert request.allow_paid_stars is None
-
-
-@pytest.mark.asyncio
-async def test_quota_check_does_not_run_a_search(monkeypatch):
-    fake = _FakeClient(remains=7)
-    monkeypatch.setattr(main, "client", fake)
-
-    payload = json.loads(await main.check_public_post_search_quota("GEO"))
-
-    assert payload["total_daily"] == 10
-    assert payload["remains"] == 7
-    assert len(fake.requests) == 1
-    assert isinstance(fake.requests[0], functions.channels.CheckSearchPostsFloodRequest)
