@@ -2,11 +2,76 @@
 
 [English](README.md) · 中文
 
-让 AI（Claude 或任何支持 MCP 的助手）用你的 Telegram 账号干活：进群、读消息、搜全网公开帖、查人、管群、发消息、整理分组……**39 个工具、98 项功能**，一份连接全电脑共用。
+让 AI（Claude 或任何支持 MCP 的助手）用你的 Telegram 账号干活：进群、读消息、搜全网公开帖、查人、管群、发消息、整理分组……**42 个工具、100 项功能**，一份连接全电脑共用。
 
-它跟别的 Telegram MCP 不一样的地方：**它是为「顺藤摸瓜找源头」长出来的。**
+它跟别的 Telegram MCP 不一样的地方：**它是为「顺藤摸瓜找源头」长出来的** —— 一句话画出一条供应链，一句话给一个卖家打分。
+
+## 一句话，画出一条供应链
+
+跟 Claude 说「把这几个群里带链接的帖读一遍，追两层，源头在哪」，它调一次 `trace_source`，50 秒后给你这张图（真实跑出来的，去掉了不相干的分支、名字打码）：
+
+```mermaid
+graph LR
+  classDef seller fill:#f4f4f4,stroke:#999
+  classDef site fill:#e8f1ff,stroke:#3b82f6
+  classDef source fill:#ffedd5,stroke:#ea580c,stroke-width:3px
+  s1["@卖家甲"]:::seller
+  s2["@卖家乙"]:::seller
+  b1["@群帮手机器人"]
+  w1["uu-**.net<br/>AI 视频接口"]:::source
+  w2["uu-**.com<br/>影视 CMS 官网"]:::source
+  u1["@u***_com<br/>上游 U"]:::source
+  g1["@u*_cms<br/>U 的交流群"]:::source
+  c1["@u*_cms_com<br/>U 的官方频道"]
+  s1 -->|贴链接| w1
+  s1 -->|贴链接| w2
+  s1 -->|提到| u1
+  s2 -->|贴链接| w1
+  s2 -->|贴链接| w2
+  s2 -->|提到| u1
+  s2 -->|提到| g1
+  u1 -->|简介里写着| w1
+  u1 -->|简介里写着| w2
+  c1 -->|贴链接| w1
+  c1 -->|提到| u1
+  b1 -->|在群里发帖| g1
+  b1 -->|贴链接| w1
+  p1["@批发源头频道"]:::seller
+  k1["a***.pro<br/>卡密站"]:::site
+  kf["@a***_kefu<br/>唯一客服"]
+  kg["@a***pro<br/>交流群"]:::source
+  p1 -->|贴链接| k1
+  k1 -->|联系方式| kf
+  k1 -->|联系方式| kg
+  kf -->|简介里写着| k1
+  kf -->|提到| p1
+  kf -->|提到| kg
+  s3["@刷屏机器人"]:::seller
+  t1["t***ai.com"]:::site
+  s3 -->|贴链接| t1
+```
+
+> 读了 39 条帖、10 个卖家，查了 12 个站，核对了 8 个 @号。线索汇聚点：@u***_com（5 个账号提到它）。
+
+看图就懂：两个「卖家」推的两个站，站上、简介里、交流群里全指向同一家 U，他们只是中间商。另一条线：频道 → 卡网 → 卡网上留的客服号 → 客服的简介又写回这个频道，一个闭环，这家是自产自销。橙色粗框是线索汇聚点，红色是被 Cloudflare 判钓鱼或被官方标记的。
+
+再说一句「@某卖家 靠谱吗」，它调一次 `check_seller`，十秒一张卡，A/B/C/D 分档，每条红旗都带原话出处：
+
+```json
+{"handle":"@v***bot","tier":"C","tier_definition":"证据不足，或长期沉寂，或商业模式风险高",
+ "red_flags":["活跃度靠刷屏：50 条只有 1 条不同文案（50.0 倍）"],
+ "activity":{"posts_sampled":50,"days_since_last":0,"distinct_texts":1,"spam_ratio":50.0,"posts_with_price":50},
+ "provenance":{"edited_old":0,"forwarded_old":0,"via_bot":0},
+ "clues":{"domains":["t***ai.com"],"prices":["5 元","98 元","100刀"]},
+ "sites":{"t***ai.com":{"verdict":"reachable"}},
+ "accusations":[],"related_accounts":[],"confidence":"medium"}
+```
+
+**边界**：追几层、查几个站、核对几个 @号、最多几秒都是参数，用完了在 `truncated` 里明说停在哪。核对 @号 会触发 Telegram 限速，所以默认只核对 8 个、每个隔 1 秒。抓站只抓首页、拒绝内网地址、不回传网页内容；本机走透明代理（fake-ip）时拿不到真实 IP，判不了「同一台服务器」。分档只是相对可核查度，不是购买背书。
 
 ## 一套找源头的打法
+
+`trace_source` 就是下面这四步的自动化版。想手动一步步来（或者它追丢了接着追），用这些：
 
 场景：你想知道某种货或服务真正的源头在哪、中间商都是谁。
 
@@ -44,12 +109,13 @@ claude mcp add --transport http -s user telegram http://127.0.0.1:8799/mcp
 
 命令末尾的目录是**允许发文件 / 下载文件的目录**，不给就禁用那几个工具（见「安全线」）。
 
-## 工具（39 个）
+## 工具（42 个）
 
 一个工具管一类事，用 `action` 参数选具体动作，所以工具清单只有原版三分之一大，功能一项不少。
 
 | 类别 | 工具 |
 |---|---|
+| 调研 | `trace_source`（一键溯源：搜帖 → 抽 @号/网址 → 抓站找上游 → 回 Telegram 核对 → 图谱）· `check_seller`（卖家一眼看：分档卡片，带原话证据） |
 | 我自己 | `get_me` · `update_profile`（名字/简介/头像）· `privacy`（get/set）· `set_bot_commands` · `get_sticker_sets` |
 | 群 / 频道 / 人 | `list_chats` · `get_chat`（简介、共同群、在线状态、头像、scam/fake）· `get_participants`（成员/管理员/被封）· `list_topics` · `join_chat`（用户名/链接/邀请码）· `leave_chat` · `create_chat` · `edit_chat` · `manage_member`（invite/ban/unban/promote/demote）· `get_invite_link` · `get_recent_actions` · `set_chat_state`（mute/unmute/archive/unarchive） |
 | 消息 | `list_messages`（最新/搜词/按日期/只看某人/某条前后）· `get_pinned_messages` · `send_message`（文字/回复/文件/语音/贴纸/GIF）· `send_contact` · `edit_message` · `delete_message` · `forward_message` · `pin_message` · `mark_as_read` · `react`（add/remove/list）· `create_poll` · `press_inline_button` · `download_media` · `save_draft` · `get_drafts` |

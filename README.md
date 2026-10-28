@@ -2,11 +2,76 @@
 
 English · [中文](README.zh-CN.md)
 
-Let an AI (Claude, or any MCP-capable assistant) work inside your Telegram account: join groups, read messages, search every public post on Telegram, look people up, run groups, send messages, organize folders — **39 tools, 98 features**, one connection shared by every window on your machine.
+Let an AI (Claude, or any MCP-capable assistant) work inside your Telegram account: join groups, read messages, search every public post on Telegram, look people up, run groups, send messages, organize folders — **42 tools, 100 features**, one connection shared by every window on your machine.
 
-What makes it different from other Telegram MCP servers: **it grew out of tracing supply chains back to their source.**
+What makes it different from other Telegram MCP servers: **it grew out of tracing supply chains back to their source** — one sentence draws the chain, one sentence grades a seller.
+
+## One sentence, one supply chain
+
+Tell Claude "read the posts with links in these five groups, follow two hops, where does it come from?" — it calls `trace_source` once and 50 seconds later hands you this graph (a real run; unrelated branches removed, names masked):
+
+```mermaid
+graph LR
+  classDef seller fill:#f4f4f4,stroke:#999
+  classDef site fill:#e8f1ff,stroke:#3b82f6
+  classDef source fill:#ffedd5,stroke:#ea580c,stroke-width:3px
+  s1["@seller_A"]:::seller
+  s2["@seller_B"]:::seller
+  b1["@group_helper_bot"]
+  w1["uu-**.net<br/>AI video API"]:::source
+  w2["uu-**.com<br/>video CMS vendor"]:::source
+  u1["@u***_com<br/>upstream U"]:::source
+  g1["@u*_cms<br/>U's group"]:::source
+  c1["@u*_cms_com<br/>U's channel"]
+  s1 -->|links to| w1
+  s1 -->|links to| w2
+  s1 -->|mentions| u1
+  s2 -->|links to| w1
+  s2 -->|links to| w2
+  s2 -->|mentions| u1
+  s2 -->|mentions| g1
+  u1 -->|bio says| w1
+  u1 -->|bio says| w2
+  c1 -->|links to| w1
+  c1 -->|mentions| u1
+  b1 -->|posts in| g1
+  b1 -->|links to| w1
+  p1["@wholesale_channel"]:::seller
+  k1["a***.pro<br/>card shop"]:::site
+  kf["@a***_kefu<br/>support"]
+  kg["@a***pro<br/>group"]:::source
+  p1 -->|links to| k1
+  k1 -->|contact on site| kf
+  k1 -->|contact on site| kg
+  kf -->|bio says| k1
+  kf -->|mentions| p1
+  kf -->|mentions| kg
+  s3["@spam_bot"]:::seller
+  t1["t***ai.com"]:::site
+  s3 -->|links to| t1
+```
+
+> Read 39 posts from 10 sellers, probed 12 sites, re-checked 8 handles. Convergence point: @u***_com (mentioned by 5 accounts).
+
+Read it at a glance: two "sellers" push two sites, and the sites, the bios and the group all point at one upstream U — the sellers are middlemen. The other chain: a channel → its card shop → the support handle the shop lists → whose bio points back at the channel. A closed loop: that one sells its own stock. Orange thick border = where the clues converge; red = flagged as phishing by Cloudflare or flagged by Telegram.
+
+Then say "is @someseller legit?" — it calls `check_seller` once and ten seconds later you get a card: tier A–D, every red flag with the quote it came from:
+
+```json
+{"handle":"@v***bot","tier":"C","tier_definition":"证据不足，或长期沉寂，或商业模式风险高  (thin evidence / dormant / risky business model)",
+ "red_flags":["活跃度靠刷屏：50 条只有 1 条不同文案（50.0 倍） (activity is spam: 50 posts, 1 distinct text, 50x)"],
+ "activity":{"posts_sampled":50,"days_since_last":0,"distinct_texts":1,"spam_ratio":50.0,"posts_with_price":50},
+ "provenance":{"edited_old":0,"forwarded_old":0,"via_bot":0},
+ "clues":{"domains":["t***ai.com"],"prices":["5 元","98 元","100刀"]},
+ "sites":{"t***ai.com":{"verdict":"reachable"}},
+ "accusations":[],"related_accounts":[],"confidence":"medium"}
+```
+
+**Limits**: hops, sites probed, handles re-checked and seconds are all parameters; when a budget runs out, `truncated` says where it stopped. Username lookups are rate-limited by Telegram, so by default only 8 handles are re-checked, one second apart. Sites are probed by fetching the homepage only, private-network hosts are refused, page bodies are never returned. Behind a transparent proxy (fake-ip) the real IP is unknown, so "same server" cannot be judged. Tiers are relative verifiability, not a purchase endorsement.
 
 ## A playbook for finding the source
+
+`trace_source` automates the four steps below. To go step by step by hand (or to keep going where it lost the trail):
 
 Scenario: you want to know where some product or service really comes from, and who the middlemen are.
 
@@ -44,12 +109,13 @@ claude mcp add --transport http -s user telegram http://127.0.0.1:8799/mcp
 
 The directories at the end of the command are the **only places file tools may read from or write to**; omit them and those tools are disabled (see "Safety").
 
-## Tools (39)
+## Tools (42)
 
 One tool per kind of thing, with an `action` parameter choosing what to do — so the tool list is a third the size of the original 98-tool version with nothing missing.
 
 | Area | Tools |
 |---|---|
+| Investigation | `trace_source` (one-shot trace: posts → @handles/domains → probe sites for upstream → re-check on Telegram → graph) · `check_seller` (one-glance trust card, tier A–D with quoted evidence) |
 | Me | `get_me` · `update_profile` (name/bio/photo) · `privacy` (get/set) · `set_bot_commands` · `get_sticker_sets` |
 | Chats, channels, people | `list_chats` · `get_chat` (bio, shared groups, online status, photos, scam/fake) · `get_participants` (members/admins/banned) · `list_topics` · `join_chat` (username/link/invite hash) · `leave_chat` · `create_chat` · `edit_chat` · `manage_member` (invite/ban/unban/promote/demote) · `get_invite_link` · `get_recent_actions` · `set_chat_state` (mute/unmute/archive/unarchive) |
 | Messages | `list_messages` (latest/keyword/date range/one sender/around a message) · `get_pinned_messages` · `send_message` (text/reply/file/voice/sticker/GIF) · `send_contact` · `edit_message` · `delete_message` · `forward_message` · `pin_message` · `mark_as_read` · `react` (add/remove/list) · `create_poll` · `press_inline_button` · `download_media` · `save_draft` · `get_drafts` |

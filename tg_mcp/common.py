@@ -6,6 +6,7 @@ from collections import Counter
 import os
 import re
 import time
+import unicodedata
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from functools import wraps
@@ -595,3 +596,74 @@ async def writable_path(raw: Optional[str], default_name: str, ctx: Optional[Con
     if not os.access(parent, os.W_OK):
         return None, f"Directory not writable: {parent}"
     return candidate, None
+
+
+# ---------- 调研用的身份信号（sockpuppet.py / market_watch.py / trace.py 共用） ----------
+
+# 强信号：几乎不可能是巧合
+CRYPTO_RE = re.compile(r"\b(?:T[A-Za-z0-9]{33}|0x[a-fA-F0-9]{40}|bc1[a-z0-9]{25,62})\b")
+WECHAT_RE = re.compile(r"(?:微信|weixin|wechat|vx|VX)\s*[号:：]?\s*([A-Za-z][\w\-]{5,19})")
+EMAIL_RE = re.compile(r"\b[\w.\-]+@[\w\-]+\.[a-z]{2,}\b", re.I)
+
+# 群友明说"这俩是同一个人"的句式 —— 目前最硬的证据，胜过任何统计特征。
+# 例："他把用户名从 @old_handle_1 改成了 @new_handle_1"、"@main_handle ... 小号@alt_handle"
+ALIAS_PATTERNS = [
+    re.compile(r"从\s*@?([A-Za-z0-9_]{5,32})\s*改(?:成|为)了?\s*@?([A-Za-z0-9_]{5,32})"),
+    re.compile(r"@([A-Za-z0-9_]{5,32}).{0,40}?小号\s*@?([A-Za-z0-9_]{5,32})"),
+    re.compile(r"@([A-Za-z0-9_]{5,32}).{0,30}?(?:马甲|换号|曾用名|又叫|新号)\s*@?([A-Za-z0-9_]{5,32})"),
+]
+
+# 太通用、串起来没有意义的域名（社交平台、官网、短链）
+GENERIC_HOSTS = {
+    "t.me", "telegram.org", "telegram.me", "x.com", "twitter.com", "github.com",
+    "openai.com", "chatgpt.com", "anthropic.com", "claude.ai", "google.com",
+    "youtube.com", "bit.ly", "linux.do", "docs.google.com", "gemini.google.com",
+}
+
+# Jack 在《卖家靠谱度核查》里手工用的负面词，原样沿用以保持结论可比
+NEGATIVE_WORDS = [
+    "骗子", "被骗", "曝光", "跑路", "拉黑", "不稳", "掉订阅",
+    "无质保", "不到账", "退款", "维权", "失联", "假的", "垃圾",
+]
+
+
+def norm_url(u: str) -> str:
+    """归一到「主机 + 路径」。保留 /shop/<名字> —— 卡网是多租户的，
+    同一个平台上不同店铺是不同的人，按域名株连会把正规平台整个拉黑
+    （实测教训：pay.ldxp.cn 是正规的链动小铺，被仿冒的是 play.ldxp.demo-fake.cn）。"""
+    u = u.strip().rstrip(".,;)]}】》")
+    m = re.match(r"https?://([^/\s]+)(/[^\s?#]*)?", u, re.I)
+    if not m:
+        return ""
+    host = re.sub(r"^www\.", "", m.group(1).lower())  # 不能用 lstrip("www.")：它会把 web.x.com 剥成 eb.x.com
+    if host in GENERIC_HOSTS:
+        return ""
+    path = (m.group(2) or "").rstrip("/")
+    return host + path
+
+
+def norm_text(t: str) -> str:
+    """文案指纹：把规避检索用的混淆字符彻底抹平，只留可比的骨架。
+
+    卖家把零宽字符和间隔号插进单词中间来躲检索，例如实际文本长这样：
+        G·em·i‌n‍i  ‌P﻿r‌o        （中间夹着 U+200C / U+200D / U+1808 和「·」）
+
+    关键是**删除**而不是替换成空格：分隔符的位置每条都不一样，替换成空格后
+    「G·em·ini」和「Ge·mi·ni」仍是两个不同的字符串，等于没归一。
+    实测差别极大 —— @demo_seller1 的 332 条记录，替换式只能去重到 307 条，
+    删除式去重到 11 条（真实模板其实只有三四个，他连字母都随机漏，
+    shopname_kyc / shopname_ky / shopname_kc 各算一条）。
+    """
+    t = unicodedata.normalize("NFKC", t)
+    # Cf = 格式字符（零宽连接符等），Mn = 组合记号，都是常见的隐形分隔手段
+    t = "".join(c for c in t if unicodedata.category(c) not in ("Cf", "Mn"))
+    return re.sub(r"[^0-9a-zA-Z一-鿿]+", "", t).lower()
+
+
+def name_kin(a: str, b: str) -> bool:
+    """handle 是否像同一个人起的：去掉尾部数字和 bot/官方等后缀后相同。
+    例 main_handle / main_handle77、catshop / catshop666、somebrand / somebrand_bot。"""
+    def stem(x):
+        return re.sub(r"(?:_?bot|官方|admin|[0-9]+)+$", "", x)
+    sa, sb = stem(a), stem(b)
+    return len(sa) >= 4 and sa == sb and a != b

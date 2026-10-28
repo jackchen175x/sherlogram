@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from telethon import errors, functions  # noqa: E402
 
 from tg_mcp.app import client  # noqa: E402  复用常驻那套配置 / 登录凭证
-from tg_mcp.common import extract_public_post_clues, resolve_entity  # noqa: E402
+from tg_mcp.common import NEGATIVE_WORDS, extract_public_post_clues, resolve_entity  # noqa: E402
 
 PRICE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(r|rmb|元|块|¥|刀|u|usd|美金)", re.I)
 
@@ -511,11 +511,6 @@ RELAY_RE = re.compile(r"@[A-Za-z0-9_]{3,32}\)?\s*在\s*.{0,80}?中发帖", re.S)
 # 提及与关键词相隔多少字符以内才算"可能在说他"
 NEAR_CHARS = 25
 
-# Jack 在《卖家靠谱度核查》里手工用的负面词，原样沿用以保持结论可比
-NEGATIVE_WORDS = [
-    "骗子", "被骗", "曝光", "跑路", "拉黑", "不稳", "掉订阅",
-    "无质保", "不到账", "退款", "维权", "失联", "假的", "垃圾",
-]
 
 
 async def scan_corpus(
