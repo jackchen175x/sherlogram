@@ -67,7 +67,18 @@ graph LR
  "accusations":[],"related_accounts":[],"confidence":"medium"}
 ```
 
-**边界**：追几层、查几个站、核对几个 @号、最多几秒都是参数，用完了在 `truncated` 里明说停在哪。核对 @号 会触发 Telegram 限速，所以默认只核对 8 个、每个隔 1 秒。抓站只抓首页、拒绝内网地址、不回传网页内容；本机走透明代理（fake-ip）时拿不到真实 IP，判不了「同一台服务器」。分档只是相对可核查度，不是购买背书。
+再问一句「这个收款地址的钱去哪了」，还是 `trace_source`，给它 `address`，顺着波场 USDT 的流水往下追两层，14 秒：
+
+```json
+{"summary":"查了 4 个钱包的链上流水。线索汇聚点：TQGB…Zwj2（3 个地址给它打过钱；1 个钱包的钱转到它（资金汇聚）；链上进 2288.0万U、出 1265.0万U）",
+ "wallets":{"TNG3…CkVH":{"in_usdt":719414,"out_usdt":6755927,"payers":155,"payees":24,"first":"2026-08-10","last":"2026-09-09",
+   "top_out":[{"address":"TQGB…Zwj2","usdt":2879940,"count":2},{"address":"TW3o…oHFp","usdt":1888888,"count":1}],
+   "note":"只看了最近 200 笔","explorer":"https://tronscan.org/#/address/TNG3…CkVH"}}}
+```
+
+帖子里出现的收款地址也会自动进图谱：**两个卖家用同一个地址收款，就是同一个人**，比任何文字线索都硬；钱最后汇到谁那里，谁就是上游。
+
+**边界**：追几层、查几个站、核对几个 @号、查几个钱包、最多几秒都是参数，用完了在 `truncated` 里明说停在哪。核对 @号 会触发 Telegram 限速，所以默认只核对 8 个、每个隔 1 秒。抓站只抓首页、拒绝内网地址、不回传网页内容；本机走透明代理（fake-ip）时拿不到真实 IP，判不了「同一台服务器」。链上只查波场 USDT（灰产收款的主流），走波场官方免费接口，不带钥匙能用、查多了会限速，环境变量 `TRONGRID_API_KEY` 可放宽；地址是交易所还是风险地址，免费接口不给标签，结果里带浏览器链接自己看。分档只是相对可核查度，不是购买背书。
 
 ## 一套找源头的打法
 
@@ -115,7 +126,7 @@ claude mcp add --transport http -s user telegram http://127.0.0.1:8799/mcp
 
 | 类别 | 工具 |
 |---|---|
-| 调研 | `trace_source`（一键溯源：搜帖 → 抽 @号/网址 → 抓站找上游 → 回 Telegram 核对 → 图谱）· `check_seller`（卖家一眼看：分档卡片，带原话证据） |
+| 调研 | `trace_source`（一键溯源：搜帖 → 抽 @号/网址/收款地址 → 抓站找上游 → 回 Telegram 核对 → 图谱；给 `address` 则追 USDT 资金流向）· `check_seller`（卖家一眼看：分档卡片，带原话证据） |
 | 我自己 | `get_me` · `update_profile`（名字/简介/头像）· `privacy`（get/set）· `set_bot_commands` · `get_sticker_sets` |
 | 群 / 频道 / 人 | `list_chats` · `get_chat`（简介、共同群、在线状态、头像、scam/fake）· `get_participants`（成员/管理员/被封）· `list_topics` · `join_chat`（用户名/链接/邀请码）· `leave_chat` · `create_chat` · `edit_chat` · `manage_member`（invite/ban/unban/promote/demote）· `get_invite_link` · `get_recent_actions` · `set_chat_state`（mute/unmute/archive/unarchive） |
 | 消息 | `list_messages`（最新/搜词/按日期/只看某人/某条前后）· `get_pinned_messages` · `send_message`（文字/回复/文件/语音/贴纸/GIF）· `send_contact` · `edit_message` · `delete_message` · `forward_message` · `pin_message` · `mark_as_read` · `react`（add/remove/list）· `create_poll` · `press_inline_button` · `download_media` · `save_draft` · `get_drafts` |

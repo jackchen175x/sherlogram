@@ -206,7 +206,7 @@ async def test_group_members_enter_graph_only_with_clues(fake):
 
 
 async def test_trace_needs_query_or_chat(fake):
-    with pytest.raises(Exception, match="query and/or chat_id"):
+    with pytest.raises(Exception, match="query, chat_id and/or address"):
         await trace.trace_source()
 
 
@@ -341,3 +341,97 @@ async def test_check_seller_channel_reads_own_posts_and_opacity(fake):
     out = json.loads(await trace.check_seller(handle="@sellerchan", probe_sites=False))
     assert out["profile"]["kind"] == "channel" and out["profile"]["members"] == 10
     assert "结构不透明" in " ".join(out["red_flags"]) and out["tier"] == "C"
+
+
+# ---------- 钱的去向 ----------
+
+import hashlib
+
+
+def tron_addr(seed: int) -> str:
+    """造一个过校验和的波场地址（测试用）。"""
+    body = b"\x41" + hashlib.sha256(str(seed).encode()).digest()[:20]
+    raw = body + hashlib.sha256(hashlib.sha256(body).digest()).digest()[:4]
+    n, out = int.from_bytes(raw, "big"), ""
+    while n:
+        n, r = divmod(n, 58)
+        out = trace._B58[r] + out
+    return out
+
+
+W1, W2, W3, W4 = tron_addr(1), tron_addr(2), tron_addr(3), tron_addr(4)
+USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+
+
+def tx(frm, to, usdt, ts=1_790_000_000):
+    return {"from": frm, "to": to, "value": str(int(usdt * 1_000_000)), "token_info": {"symbol": "USDT", "decimals": 6}, "block_timestamp": ts * 1000}
+
+
+def test_tron_address_validation():
+    assert trace.valid_tron(USDT_CONTRACT) and trace.valid_tron(W1)
+    assert not trace.valid_tron(USDT_CONTRACT[:-1] + "A")  # 改一个字就不是地址
+    assert trace.wallets_in(f"打 U 到 {W1} 或 0xAbCdef0123456789abcdef0123456789ABCDEF01 或 bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq") == {
+        ("tron", W1), ("eth", "0xabcdef0123456789abcdef0123456789abcdef01"), ("btc", "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq")}
+    assert trace.wallets_in("TXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX 不是地址") == set()
+
+
+def test_summarize_transfers():
+    approval = {**tx(W1, W4, 0), "type": "Approval", "value": str(2 ** 256 - 1)}  # 授权记录，不是钱动了
+    s = trace.summarize_transfers(W1, [tx(W2, W1, 100), tx(W2, W1, 50, 1_790_100_000), tx(W1, W3, 120), tx(W1, W4, 20), approval])
+    assert (s["tx"], s["in_usdt"], s["out_usdt"], s["payers"], s["payees"]) == (5, 150, 140, 1, 2)
+    assert s["top_in"] == [{"address": W2, "usdt": 150, "count": 2}] and s["top_out"][0]["address"] == W3
+    assert s["first"] == "2026-09-21" and s["last"] == "2026-09-22" and s["note"] is None and W1 in s["explorer"]
+
+
+@pytest.fixture
+def chain(monkeypatch):
+    ledger = {W1: [tx(W2, W1, 1000), tx(W1, W3, 900), tx(W1, W4, 50)], W3: [tx(W1, W3, 900), tx(W3, W4, 880)]}
+
+    async def transfers(addr, limit=200):
+        if addr == "T" + "9" * 33:
+            raise RuntimeError("trongrid_403")
+        return ledger.get(addr, [])
+
+    monkeypatch.setattr(trace, "_tron_transfers", transfers)
+    return ledger
+
+
+async def test_trace_shared_wallet_means_same_person(fake, chain):
+    fake.msgs["demo_group"] = [msg(1, f"Claude 代充 收 U {W1}", A), msg(2, f"GPT 代充 打到 {W1}", B)]
+    out = json.loads(await trace.trace_source(chat_id="demo_group", depth=2))
+    top = out["candidates"][0]
+    assert top["node"] == W1 and "2 个卖家用它收款（同一个人）" in top["reasons"]
+    assert W1 not in {c["node"] for c in json.loads(await trace.trace_source(address=W1, depth=1))["candidates"]}  # 起点不算汇聚点
+    assert any("链上进 1000U、出 950U" in r for r in top["reasons"])
+    assert out["wallets"][W1]["top_out"][0]["address"] == W3 and out["wallets"][W3]["out_usdt"] == 880
+    assert "-->|收款地址|" in out["mermaid"] and "-->|转出 900U/1笔|" in out["mermaid"] and ":::wallet" in out["mermaid"]
+    assert "查了 3 个钱包" in out["summary"]  # W4 也查了，只是没流水
+
+
+async def test_trace_from_address_follows_money(fake, chain):
+    out = json.loads(await trace.trace_source(address=W1, depth=2, max_wallets=1))
+    assert out["posts_read"] == 0 and set(out["wallets"]) == {W1}
+    assert any("钱包没查" in n for n in out["truncated"])
+    with pytest.raises(Exception, match="valid Tron"):
+        await trace.trace_source(address="T" + "x" * 33)
+
+
+async def test_trace_wallet_api_refusal_is_reported(fake, chain):
+    bad = "T" + "9" * 33
+    monkeypatch_valid = trace.valid_tron
+    trace.valid_tron = lambda a: a == bad or monkeypatch_valid(a)
+    try:
+        out = json.loads(await trace.trace_source(address=bad, depth=1))
+    finally:
+        trace.valid_tron = monkeypatch_valid
+    assert out["wallets"][bad]["error"] == "trongrid_403" and any("限速" in n for n in out["truncated"])
+
+
+async def test_check_seller_money_section(fake, chain):
+    fake.users["seller_a"] = A
+    fake.common = [GROUP]
+    fake.by_user[(777, 1)] = [msg(1, f"GPT Plus 120元 收款 {W1} 秒发 售后无忧", A)]
+    out = json.loads(await trace.check_seller(handle="@seller_a", probe_sites=False))
+    assert out["money"][W1]["in_usdt"] == 1000 and out["money"][W1]["top_out"][0]["address"] == W3
+    assert out["clues"]["signals"]["crypto"] == [W1]
+    assert any("的钱主要转去" in h for h in out["upstream_hints"])

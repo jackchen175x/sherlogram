@@ -7,8 +7,10 @@
 """
 
 import asyncio
+import hashlib
 import ipaddress
 import json
+import os
 import re
 import socket
 import time
@@ -23,7 +25,6 @@ from telethon import errors, functions, types, utils
 from .app import client, logger, mcp
 from .common import (
     ALIAS_PATTERNS,
-    CRYPTO_RE,
     EMAIL_RE,
     GENERIC_HOSTS,
     NEGATIVE_WORDS,
@@ -126,6 +127,98 @@ def site_clues(host: str, body: str) -> Dict[str, Any]:
     platform = next((name for marker, name in _PLATFORM_MARKERS if marker in low), None)
     # 调得最多的排前面：真正的业务后台在页面里出现几十次，顺手挂的外链只有一次
     return {"title": title, "contacts": sorted(contacts - _NOT_HANDLES)[:10], "calls": [h for h, _ in calls.most_common(8)], "platform": platform}
+
+
+# ---------- 收款地址、链上流水 ----------
+
+_B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+_ETH_ADDR = re.compile(r"\b0x[0-9a-fA-F]{40}\b")
+_BTC_ADDR = re.compile(r"\bbc1[a-z0-9]{25,62}\b")
+_TRON_ADDR = re.compile(r"\bT[1-9A-HJ-NP-Za-km-z]{33}\b")
+TRONGRID = "https://api.trongrid.io"
+USDT_TRC20 = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"  # 波场上 USDT 的合约地址，灰产收款几乎全走它
+_TX_LIMIT = 200  # TronGrid 一页最多 200 笔
+
+
+def valid_tron(addr: str) -> bool:
+    """波场地址要过校验和：34 个字符里随便一个错都不是地址，免得把乱码当收款地址。"""
+    n = 0
+    for ch in addr:
+        i = _B58.find(ch)
+        if i < 0:
+            return False
+        n = n * 58 + i
+    try:
+        raw = n.to_bytes(25, "big")
+    except OverflowError:
+        return False
+    return raw[0] == 0x41 and hashlib.sha256(hashlib.sha256(raw[:21]).digest()).digest()[:4] == raw[21:]
+
+
+def wallets_in(text: str) -> Set[Tuple[str, str]]:
+    """一段文字里的收款地址：(链, 地址)。波场过校验和；以太、比特币只按格式。"""
+    found = {("tron", a) for a in _TRON_ADDR.findall(text) if valid_tron(a)}
+    found |= {("eth", a.lower()) for a in _ETH_ADDR.findall(text)}
+    found |= {("btc", a) for a in _BTC_ADDR.findall(text)}
+    return found
+
+
+def _short(addr: str) -> str:
+    return f"{addr[:6]}…{addr[-4:]}"
+
+
+def _usdt(n: float) -> str:
+    return f"{n / 10000:.1f}万U" if n >= 10000 else f"{n:.0f}U"
+
+
+async def _tron_transfers(addr: str, limit: int = _TX_LIMIT) -> List[Dict[str, Any]]:
+    """波场官方免费接口拉这个地址最近的 USDT 转账。不带钥匙也能查，查多了会限速；配 TRONGRID_API_KEY 放宽。"""
+    headers = {"User-Agent": UA}
+    if os.getenv("TRONGRID_API_KEY"):
+        headers["TRON-PRO-API-KEY"] = os.environ["TRONGRID_API_KEY"]
+    async with httpx.AsyncClient(timeout=20, headers=headers) as c:
+        r = await c.get(f"{TRONGRID}/v1/accounts/{addr}/transactions/trc20", params={"limit": limit, "contract_address": USDT_TRC20})
+    if r.status_code != 200:
+        raise RuntimeError(f"trongrid_{r.status_code}")
+    return r.json().get("data", [])
+
+
+def summarize_transfers(addr: str, txs: List[Dict[str, Any]], top: int = 3) -> Dict[str, Any]:
+    """一个地址的 USDT 进出账：总额、笔数、首末时间、进出对手方前几名（按金额）。"""
+    ins: Dict[str, List[float]] = defaultdict(list)
+    outs: Dict[str, List[float]] = defaultdict(list)
+    stamps = []
+    for t in txs:
+        if t.get("type", "Transfer") != "Transfer":
+            continue  # 「授权」记录的金额是 2^256-1 这种天文数字，不是钱动了
+        try:
+            amt = int(t.get("value", 0)) / 10 ** int(t.get("token_info", {}).get("decimals", 6))
+        except (TypeError, ValueError):
+            continue
+        if amt > 1e11:
+            continue  # 比全世界的 USDT 还多，肯定不是转账
+        if t.get("to") == addr:
+            ins[t.get("from", "?")].append(amt)
+        elif t.get("from") == addr:
+            outs[t.get("to", "?")].append(amt)
+        if t.get("block_timestamp"):
+            stamps.append(int(t["block_timestamp"]) // 1000)
+
+    def ranked(d):
+        rows = sorted(((k, sum(v), len(v)) for k, v in d.items()), key=lambda x: -x[1])[:top]
+        return [{"address": k, "usdt": round(a, 2), "count": n} for k, a, n in rows]
+
+    def day(ts):
+        return f"{datetime.fromtimestamp(ts, timezone.utc):%Y-%m-%d}"
+
+    return {
+        "tx": len(txs), "in_usdt": round(sum(map(sum, ins.values())), 2), "out_usdt": round(sum(map(sum, outs.values())), 2),
+        "payers": len(ins), "payees": len(outs),
+        "first": day(min(stamps)) if stamps else None, "last": day(max(stamps)) if stamps else None,
+        "top_in": ranked(ins), "top_out": ranked(outs),
+        "note": f"只看了最近 {_TX_LIMIT} 笔" if len(txs) >= _TX_LIMIT else None,
+        "explorer": f"https://tronscan.org/#/address/{addr}",  # 标签（交易所 / 风险）只能上这儿手查，免费接口不给
+    }
 
 
 # ---------- 抓网站 ----------
@@ -321,6 +414,7 @@ class _Graph:
     def __init__(self):
         self.nodes: Dict[str, Dict[str, Any]] = {}
         self.edges: Set[Tuple[str, str, str]] = set()
+        self.weights: Dict[Tuple[str, str], str] = {}  # 画图时边上的附注（转了多少钱、几笔）
 
     def add(self, key: str, kind: str, label: Optional[str] = None, depth: int = 0, **info) -> Dict[str, Any]:
         n = self.nodes.setdefault(key, {"key": key, "kind": kind, "label": label or key.lstrip("@"), "depth": depth})
@@ -363,6 +457,11 @@ class _Graph:
                 new.append((fwd[0], "handle"))
             self.add(fwd[0], "handle", fwd[1], depth)
             self.link(src, fwd[0], "转发自")
+        for chain, addr in wallets_in(text):
+            if addr not in self.nodes:
+                new.append((addr, "wallet"))
+            self.add(addr, "wallet", _short(addr), depth, chain=chain)
+            self.link(src, addr, "收款地址")  # 两个卖家用同一个地址收款 = 同一个人，比任何文字线索都硬
         return new
 
 
@@ -399,10 +498,33 @@ async def _expand_handle(graph: _Graph, key: str, depth: int, max_posts: int = 2
     return new
 
 
+async def _expand_wallet(graph: _Graph, addr: str, depth: int, branch: int = 3) -> List[Tuple[str, str]]:
+    """查一个波场地址的 USDT 流水，把钱的来路和去向画进图；返回「钱转去了哪」的前几个地址供下一层追。"""
+    node = graph.nodes[addr]
+    if node.get("chain") != "tron":
+        node["note"] = "只查波场 USDT，别的链先不追"
+        return []
+    info = summarize_transfers(addr, await _tron_transfers(addr))
+    node.update({k: v for k, v in info.items() if v not in (None, [], 0)})
+    new = []
+    for row in info["top_in"]:
+        graph.add(row["address"], "wallet", _short(row["address"]), depth + 1, chain="tron")
+        graph.link(row["address"], addr, "转入")
+        graph.weights[(row["address"], addr)] = f"{_usdt(row['usdt'])}/{row['count']}笔"
+    for row in info["top_out"][:branch]:
+        if row["address"] not in graph.nodes:
+            new.append((row["address"], "wallet"))
+        graph.add(row["address"], "wallet", _short(row["address"]), depth + 1, chain="tron")
+        graph.link(addr, row["address"], "转出")
+        graph.weights[(addr, row["address"])] = f"{_usdt(row['usdt'])}/{row['count']}笔"
+    return new
+
+
 async def _crawl(graph: _Graph, frontier: List[Tuple[str, str]], depth: int, budget: Dict[str, Any]) -> List[str]:
     """一层层往上追。每层先查站（并行）再核对 @号（串行、隔 1 秒）。预算用完或限速就停，并把停在哪说清楚。"""
     notes: List[str] = []
     sites_left, resolve_left, deadline = budget["sites"], budget["resolve"], budget["deadline"]
+    wallets_left = budget.get("wallets", 0)
     sem = asyncio.Semaphore(4)
 
     async def probe(h):
@@ -431,8 +553,13 @@ async def _crawl(graph: _Graph, frontier: List[Tuple[str, str]], depth: int, bud
         if len(handles) > resolve_left:
             notes.append(f"第 {level} 层还有 {len(handles) - resolve_left} 个 @号 没核对（max_resolve 用完）")
             handles = handles[:resolve_left]
+        wallets = sorted((k for k, kind in frontier if kind == "wallet" and "checked" not in graph.nodes[k]), key=rank)
+        if len(wallets) > wallets_left:
+            notes.append(f"第 {level} 层还有 {len(wallets) - wallets_left} 个钱包没查（max_wallets 用完）")
+            wallets = wallets[:wallets_left]
         sites_left -= len(sites)
         resolve_left -= len(handles)
+        wallets_left -= len(wallets)
 
         nxt: List[Tuple[str, str]] = []
         for rec in await asyncio.gather(*(probe(h) for h in sites)):
@@ -471,6 +598,16 @@ async def _crawl(graph: _Graph, frontier: List[Tuple[str, str]], depth: int, bud
             except Exception as e:
                 graph.nodes[k]["error"] = type(e).__name__
             await asyncio.sleep(_PAUSE)
+        for k in wallets:
+            graph.nodes[k]["checked"] = True
+            try:
+                nxt += await _expand_wallet(graph, k, level)
+            except Exception as e:
+                graph.nodes[k]["error"] = str(e) if str(e).startswith("trongrid_") else type(e).__name__
+                if "trongrid_4" in str(e):
+                    notes.append("波场接口限速或拒绝，剩下的钱包没查（配 TRONGRID_API_KEY 可放宽）")
+                    break
+            await asyncio.sleep(_PAUSE / 3)
         frontier = nxt
 
     # 两个站在同一台服务器 = 大概率同一个人（Cloudflare 后面的除外，那个 IP 是共享的）
@@ -490,6 +627,7 @@ _REASON = {
     "贴链接": "{n} 个卖家贴它的链接", "提到": "{n} 个账号提到它", "转发自": "{n} 个账号转发它的帖子",
     "联系方式": "{n} 个站留它当联系方式", "调用": "{n} 个站的代码调用它", "跳转": "{n} 个站跳转到它",
     "简介里写着": "{n} 个账号简介里写着它",
+    "收款地址": "{n} 个卖家用它收款（同一个人）", "转出": "{n} 个钱包的钱转到它（资金汇聚）", "转入": "{n} 个地址给它打过钱",
 }
 
 
@@ -512,6 +650,8 @@ def _candidates(graph: _Graph, sellers: Set[str]) -> List[Dict[str, Any]]:
             reasons.append("与 " + "、".join(sorted(same)) + " 在同一台服务器")
         if n.get("platform"):
             reasons.append(f"平台：{n['platform']}")
+        if n["kind"] == "wallet" and n.get("tx"):
+            reasons.append(f"链上进 {_usdt(n.get('in_usdt', 0))}、出 {_usdt(n.get('out_usdt', 0))}（{n['tx']} 笔，{n.get('first')}～{n.get('last')}）")
         if n.get("flags"):
             reasons.append("标记：" + "、".join(n["flags"]))
         out.append({"node": k, "kind": n["kind"], "label": n["label"], "score": len(srcs), "depth": n["depth"], "reasons": reasons})
@@ -534,6 +674,7 @@ def _mermaid(graph: _Graph, candidates: List[Dict[str, Any]], sellers: Set[str],
         "  classDef site fill:#e8f1ff,stroke:#3b82f6",
         "  classDef source fill:#ffedd5,stroke:#ea580c,stroke-width:3px",
         "  classDef bad fill:#fee2e2,stroke:#dc2626",
+        "  classDef wallet fill:#ede9fe,stroke:#7c3aed",
     ]
     for k in sorted(keep):
         n = graph.nodes[k]
@@ -542,14 +683,17 @@ def _mermaid(graph: _Graph, candidates: List[Dict[str, Any]], sellers: Set[str],
         if k.startswith("@") and short and short.casefold() != k[1:]:
             text += f"<br/>{short}"
         extra = n.get("platform") or ("钓鱼" if "钓鱼" in n.get("flags", []) else "")
+        if n["kind"] == "wallet":
+            extra = f"进 {_usdt(n.get('in_usdt', 0))} · 出 {_usdt(n.get('out_usdt', 0))}" if n.get("tx") else "钱包"
         if extra:
             text += f"<br/>{extra}"
         text = text.replace('"', "'").replace("|", "/")
-        cls = "source" if k in top else "bad" if n.get("flags") else "seller" if k in sellers else "site" if n["kind"] == "site" else ""
+        cls = "source" if k in top else "bad" if n.get("flags") else "seller" if k in sellers else "site" if n["kind"] == "site" else "wallet" if n["kind"] == "wallet" else ""
         lines.append(f'  {ids[k]}["{text}"]' + (f":::{cls}" if cls else ""))
     for s, d, rel in sorted(graph.edges):
         if s in keep and d in keep:
-            lines.append(f"  {ids[s]} -->|{rel}| {ids[d]}")
+            w = graph.weights.get((s, d))
+            lines.append(f"  {ids[s]} -->|{rel + (' ' + w if w else '')}| {ids[d]}")
     if len(graph.nodes) > cap:
         lines.append(f"  %% 还有 {len(graph.nodes) - cap} 个节点没画")
     return "\n".join(lines)
@@ -563,29 +707,37 @@ def _mermaid(graph: _Graph, candidates: List[Dict[str, Any]], sellers: Set[str],
 async def trace_source(
     query: Optional[str] = None,
     chat_id: Optional[Union[ChatRef, List[ChatRef]]] = None,
+    address: Optional[str] = None,
     depth: int = 2,
     max_messages: int = 60,
     max_sites: int = 10,
     max_resolve: int = 8,
+    max_wallets: int = 6,
     time_budget: int = 90,
 ) -> str:
-    """Trace a supply chain to its source: read posts, pull @handles and storefront domains, probe each site for its upstream (contacts it lists, APIs it calls, platform, server), re-check handles on Telegram, then rank where the clues converge. Returns JSON plus a Mermaid graph.
+    """Trace a supply chain to its source: read posts, pull @handles, storefront domains and payment addresses, probe sites for their upstream, re-check handles on Telegram, follow USDT (Tron) money flows, then rank where the clues converge. Returns JSON plus a Mermaid graph.
 
     Args:
         query: Keywords (searched in your chats and public channels).
-        chat_id: One chat or a list of chats to read instead; with query, search inside them, without, read only posts that contain links.
+        chat_id: One chat or a list to read instead; with query, search inside them, without, only posts containing links.
+        address: Start from a Tron wallet instead and follow where its USDT goes.
         depth: Hops to follow, 1-3.
-        max_messages: Seed posts to read.
-        max_sites: Sites to probe (one HTTP request each).
-        max_resolve: @handles to look up (Telegram rate-limits username lookups).
+        max_messages / max_sites / max_resolve / max_wallets: Budgets for seed posts, sites probed, @handles looked up (rate-limited), wallets queried on-chain.
         time_budget: Seconds before returning what was found so far.
     """
     try:
-        if not query and chat_id is None:
-            raise ValidationError("Give query and/or chat_id.")
+        if not query and chat_id is None and not address:
+            raise ValidationError("Give query, chat_id and/or address.")
         depth = max(1, min(int(depth), 3))
         deadline = time.monotonic() + time_budget
         posts, notes = [], []
+        graph, sellers, frontier = _Graph(), set(), []
+        if address:
+            chain = "tron" if valid_tron(address) else "eth" if _ETH_ADDR.fullmatch(address) else None
+            if not chain:
+                raise ValidationError("address must be a valid Tron (T...) or Ethereum (0x...) address.")
+            graph.add(address, "wallet", _short(address), 0, chain=chain)
+            frontier.append((address, "wallet"))
         if chat_id is not None:
             chats = chat_id if isinstance(chat_id, list) else [chat_id]
             per_chat = max(10, max_messages // len(chats))
@@ -597,7 +749,7 @@ async def trace_source(
                     continue
                 label = getattr(ent, "title", None) or getattr(ent, "first_name", None) or str(cid)
                 posts += await _seed_posts(ent, query, per_chat, lambda m, label=label: label)
-        else:
+        elif query:
             posts += await _seed_posts(None, query, max_messages, _chat_label)
             try:
                 pub, status = await _public_posts(query, max_messages)
@@ -606,17 +758,16 @@ async def trace_source(
             posts += pub
             if status:
                 notes.append(f"公开频道搜索没用上：{status}")
-        if not posts:
+        if not posts and not address:
             return dump_json({"summary": "没搜到帖子。换个关键词，或者指定 chat_id。", "posts_read": 0})
 
-        graph, sellers, frontier = _Graph(), set(), []
         for p in posts:
             sellers.add(p["sender"])
             graph.add(p["sender"], "seller", p["sender_label"], 0)
             frontier += graph.absorb(p["sender"], p["text"], 1, (p["fwd"], p["fwd_label"]))
-        notes += await _crawl(graph, frontier, depth, {"sites": max_sites, "resolve": max_resolve, "deadline": deadline})
+        notes += await _crawl(graph, frontier, depth, {"sites": max_sites, "resolve": max_resolve, "wallets": max_wallets, "deadline": deadline})
 
-        cands = _candidates(graph, sellers)
+        cands = _candidates(graph, sellers | ({address} if address else set()))  # 起点钱包不算汇聚点
         seller_rows = sorted(
             (
                 {
@@ -634,9 +785,13 @@ async def trace_source(
         }
         handles = {
             k: {f: n[f] for f in ("kind", "label", "flags", "posts", "bio", "error") if n.get(f)}
-            for k, n in graph.nodes.items() if k not in sellers and n.get("checked") and n["kind"] != "site"
+            for k, n in graph.nodes.items() if k not in sellers and n.get("checked") and n["kind"] not in ("site", "wallet")
         }
-        head = f"读了 {len(posts)} 条帖、{len(sellers)} 个卖家，查了 {len(sites)} 个站，核对了 {len(handles)} 个 @号。"
+        wallets = {
+            k: {f: n[f] for f in ("chain", "tx", "in_usdt", "out_usdt", "payers", "payees", "first", "last", "top_in", "top_out", "note", "explorer", "error") if n.get(f)}
+            for k, n in graph.nodes.items() if n["kind"] == "wallet" and n.get("checked")
+        }
+        head = f"读了 {len(posts)} 条帖、{len(sellers)} 个卖家，查了 {len(sites)} 个站，核对了 {len(handles)} 个 @号，查了 {len(wallets)} 个钱包的链上流水。"
         if cands:
             c = cands[0]
             head += f" 线索汇聚点：{c['node']}（{'；'.join(c['reasons'])}）。"
@@ -644,7 +799,7 @@ async def trace_source(
             head += " 没有汇聚点：各家线索互不重叠，加大 max_messages 或换个群再试。"
         return dump_json({
             "summary": head, "posts_read": len(posts), "sellers": seller_rows, "candidates": cands,
-            "sites": sites, "handles": handles, "truncated": notes, "mermaid": _mermaid(graph, cands, sellers),
+            "sites": sites, "handles": handles, "wallets": wallets, "truncated": notes, "mermaid": _mermaid(graph, cands, sellers),
         })
     except Exception as e:
         return log_and_format_error("trace_source", e, query=query, chat_id=chat_id)
@@ -694,7 +849,7 @@ def _post_stats(posts: List[Dict[str, Any]]) -> Dict[str, Any]:
         "domains": [h for h, _ in Counter(h for t in texts for h in hosts_in(t)).most_common(10)],
         "mentions": [h for h, _ in Counter(h for t in texts for h in handles_in(t)).most_common(10)],
         "signals": {k: v for k, v in (
-            ("crypto", sorted(set(CRYPTO_RE.findall(blob)))), ("wechat", sorted({w.lower() for w in WECHAT_RE.findall(blob)})),
+            ("crypto", sorted({a for _, a in wallets_in(blob)})), ("wechat", sorted({w.lower() for w in WECHAT_RE.findall(blob)})),
             ("email", sorted({e.lower() for e in EMAIL_RE.findall(blob)})),
         ) if v},
         "edited_old": sum(p["edited_old"] for p in posts), "fwd_old": sum(p["fwd_old"] for p in posts),
@@ -860,6 +1015,14 @@ async def check_seller(
             for r in await asyncio.gather(*(probe_site(h) for h in stats["domains"][:5])):
                 sites[r["host"]] = {k: v for k, v in r.items() if k != "host" and v}
 
+        # 钱的情况：他贴过的波场收款地址，链上进出账和钱主要转去了哪
+        money: Dict[str, Any] = {}
+        for addr in [a for a in stats["signals"].get("crypto", []) if valid_tron(a)][:3]:
+            try:
+                money[addr] = summarize_transfers(addr, await _tron_transfers(addr))
+            except Exception as e:
+                money[addr] = {"error": str(e)}
+
         acc, related = await _accusations(username, ent.id) if username else ([], {})
         renamed = sorted(related)
         low = (username or "").casefold()
@@ -873,6 +1036,10 @@ async def check_seller(
 
         tier, flags, ev = _tier(official, stats, sites, acc, opacity, renamed)
         upstream = [f"转发自 {x}" for x in stats["fwd_from"]] + [f"{h} 用的是 {r['platform']}" for h, r in sites.items() if r.get("platform")]
+        upstream += [
+            f"收款地址 {_short(a)} 的钱主要转去 {_short(m['top_out'][0]['address'])}（{_usdt(m['top_out'][0]['usdt'])}）"
+            for a, m in money.items() if m.get("top_out")
+        ]
         if not posts:
             confidence = "low"
             flags.append("没找到他的帖子：个人卖家的广告发在群里，传 source_chats 再查" if kind in ("user", "bot") else "读不到帖子")
@@ -889,7 +1056,7 @@ async def check_seller(
             },
             "provenance": {"edited_old": stats["edited_old"], "forwarded_old": stats["fwd_old"], "via_bot": stats["via_bot"], "forwarded_from": stats["fwd_from"]},
             "clues": {"domains": stats["domains"], "mentions": stats["mentions"], "prices": stats["prices"], "signals": stats["signals"]},
-            "sites": sites, "accusations": acc[:10],
+            "sites": sites, "money": money, "accusations": acc[:10],
             "related_accounts": [{"handle": f"@{h}", "why": why} for h, why in related.items()],
             "upstream_hints": upstream, "confidence": confidence, "disclaimer": _DISCLAIMER,
         })

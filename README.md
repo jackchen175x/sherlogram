@@ -67,7 +67,18 @@ Then say "is @someseller legit?" — it calls `check_seller` once and ten second
  "accusations":[],"related_accounts":[],"confidence":"medium"}
 ```
 
-**Limits**: hops, sites probed, handles re-checked and seconds are all parameters; when a budget runs out, `truncated` says where it stopped. Username lookups are rate-limited by Telegram, so by default only 8 handles are re-checked, one second apart. Sites are probed by fetching the homepage only, private-network hosts are refused, page bodies are never returned. Behind a transparent proxy (fake-ip) the real IP is unknown, so "same server" cannot be judged. Tiers are relative verifiability, not a purchase endorsement.
+Then ask "where does the money from this payment address go?" — same `trace_source`, pass `address`, and it follows the USDT (Tron) transfers two hops down, 14 seconds:
+
+```json
+{"summary":"查了 4 个钱包的链上流水。线索汇聚点：TQGB…Zwj2（3 个地址给它打过钱；1 个钱包的钱转到它（资金汇聚）；链上进 2288.0万U、出 1265.0万U）",
+ "wallets":{"TNG3…CkVH":{"in_usdt":719414,"out_usdt":6755927,"payers":155,"payees":24,"first":"2026-08-10","last":"2026-09-09",
+   "top_out":[{"address":"TQGB…Zwj2","usdt":2879940,"count":2},{"address":"TW3o…oHFp","usdt":1888888,"count":1}],
+   "note":"只看了最近 200 笔","explorer":"https://tronscan.org/#/address/TNG3…CkVH"}}}
+```
+
+Payment addresses found in posts enter the graph automatically: **two sellers collecting on the same address are one person** — harder evidence than any text clue; whoever the money finally pools at is the upstream.
+
+**Limits**: hops, sites probed, handles re-checked, wallets queried and seconds are all parameters; when a budget runs out, `truncated` says where it stopped. Username lookups are rate-limited by Telegram, so by default only 8 handles are re-checked, one second apart. Sites are probed by fetching the homepage only, private-network hosts are refused, page bodies are never returned. Behind a transparent proxy (fake-ip) the real IP is unknown, so "same server" cannot be judged. On-chain lookups cover USDT on Tron only (where this market collects payment), through Tron's official free API: works without a key, rate-limited when busy, `TRONGRID_API_KEY` raises the limit; the free API gives no address labels (exchange / risk), so each result links to the explorer. Tiers are relative verifiability, not a purchase endorsement.
 
 ## A playbook for finding the source
 
@@ -115,7 +126,7 @@ One tool per kind of thing, with an `action` parameter choosing what to do — s
 
 | Area | Tools |
 |---|---|
-| Investigation | `trace_source` (one-shot trace: posts → @handles/domains → probe sites for upstream → re-check on Telegram → graph) · `check_seller` (one-glance trust card, tier A–D with quoted evidence) |
+| Investigation | `trace_source` (one-shot trace: posts → @handles/domains/payment addresses → probe sites for upstream → re-check on Telegram → graph; with `address`, follows USDT money flows) · `check_seller` (one-glance trust card, tier A–D with quoted evidence) |
 | Me | `get_me` · `update_profile` (name/bio/photo) · `privacy` (get/set) · `set_bot_commands` · `get_sticker_sets` |
 | Chats, channels, people | `list_chats` · `get_chat` (bio, shared groups, online status, photos, scam/fake) · `get_participants` (members/admins/banned) · `list_topics` · `join_chat` (username/link/invite hash) · `leave_chat` · `create_chat` · `edit_chat` · `manage_member` (invite/ban/unban/promote/demote) · `get_invite_link` · `get_recent_actions` · `set_chat_state` (mute/unmute/archive/unarchive) |
 | Messages | `list_messages` (latest/keyword/date range/one sender/around a message) · `get_pinned_messages` · `send_message` (text/reply/file/voice/sticker/GIF) · `send_contact` · `edit_message` · `delete_message` · `forward_message` · `pin_message` · `mark_as_read` · `react` (add/remove/list) · `create_poll` · `press_inline_button` · `download_media` · `save_draft` · `get_drafts` |
