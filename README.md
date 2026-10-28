@@ -287,6 +287,17 @@ Edit your Claude desktop config (e.g. `~/Library/Application Support/Claude/clau
 }
 ```
 
+### 本机用法：全电脑只开一份（2026-10-23）
+
+以前每个 Claude 窗口各起一份，十来份共用一串登录凭证互相挤下线，其中一份涨到 100G 把电脑拖死。现在：
+
+- 常驻一份：`~/Library/LaunchAgents/com.jackchen.tg-mcp.plist` 开机自启、挂了自动重启，跑 `main.py --http ~ /private/tmp`，只听 `127.0.0.1:8799`（端口可用 `TG_MCP_HTTP_PORT` 改），日志 `daemon.log`
+- Claude 连它：`claude mcp add --transport http -s user telegram-mcp http://127.0.0.1:8799/mcp`
+- 常驻那份在跑时，再用 stdio 方式起 `main.py` 会直接拒绝退出
+- 内存超过 2G（`TG_MCP_MEMORY_LIMIT_MB`）自己退出，由 launchd 拉起
+- 重启：`launchctl kickstart -k gui/$(id -u)/com.jackchen.tg-mcp`
+- `market_watch.py` 仍会临时自己连一次，跑完就断，同一台机器没事
+
 ## 📝 Tool Examples with Code & Output
 
 Below are examples of the most commonly used tools with their implementation and sample output.
