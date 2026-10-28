@@ -36,10 +36,13 @@ from .common import (
     log_and_format_error,
     name_kin,
     norm_text,
+    require,
     resolve_entity,
+    readable_path,
     validate_id,
     writable_path,
 )
+from . import scamlist
 from .domain_intel import deep_probe, registrable
 from .report import render_html
 from .search import search_public_posts
@@ -957,13 +960,34 @@ def _post_stats(posts: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+_ACCUSE_WORDS = ("骗子", "被骗", "跑路", "曝光", "拉黑", "不发货")  # 反查用的几个最硬的负面词
+
+
 async def _accusations(username: str, self_id: int, limit: int = 60) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
-    """搜别人提到他的话：负面词挨着他的 @号 才算指认；顺带抓「他改名成 @xxx」这类马甲句式（返回 {号: 原话}）。"""
-    acc, aliases = [], {}
+    """搜别人提到他的话：负面词挨着他的 @号 才算指认；顺带抓「他改名成 @xxx」这类马甲句式（返回 {号: 原话}）。
+
+    两路搜再合并：按用户名往回翻 5 倍条数（实测最前面几十条要么是他自己带 @号 的广告，要么是担保群机器人
+    把他当买家 @ 出来的订单单据，真正骂他的话排在后面），再按负面词搜反查 @号（「用户名 + 负面词」一起搜返回空）。
+    """
+    acc, aliases, seen = [], {}, set()
     low = username.casefold()
-    for m in await client.get_messages(None, search=username, limit=limit):
-        if getattr(m, "sender_id", None) == self_id:
-            continue  # 自己的广告不算
+    scanned: List[Any] = []
+    # 必须带 @ 搜：带 @ 搜到的是别人 @ 他说的话，不带 @ 搜到的是担保单据里光秃秃的名字（实测 60 条 0 条指认）
+    async for m in client.iter_messages(None, search=f"@{username}", limit=limit * 5):
+        if getattr(m, "sender_id", None) != self_id:  # 自己的广告不算
+            scanned.append(m)
+    for word in _ACCUSE_WORDS:
+        try:
+            async for m in client.iter_messages(None, search=word, limit=100):
+                if getattr(m, "sender_id", None) != self_id and low in (m.message or "").casefold():
+                    scanned.append(m)
+        except Exception as e:
+            logger.warning(f"accusation search '{word}' failed: {e}")
+    for m in scanned:
+        key = (getattr(m, "chat_id", None), m.id)
+        if key in seen:
+            continue
+        seen.add(key)
         text = m.message or ""
         for pat in ALIAS_PATTERNS:
             for a, b in pat.findall(text):
@@ -975,6 +999,31 @@ async def _accusations(username: str, self_id: int, limit: int = 60) -> Tuple[Li
         if words:
             acc.append({"chat": _chat_label(m), "date": f"{m.date:%Y-%m-%d}", "message_id": m.id, "words": words, "quote": text[:200]})
     return acc, aliases
+
+
+async def _library_path(library: Optional[str], ctx: Optional[Context]) -> Tuple[Optional[Any], Optional[str]]:
+    """名单文件只许放在允许的目录里（跟发文件、下载同一条安全线）。"""
+    return await writable_path(library, scamlist.LIBRARY_NAME, ctx)
+
+
+async def _library_hits(user_id: int, username: Optional[str], wallets: List[str], ctx: Optional[Context]) -> List[Dict[str, Any]]:
+    """卖家卡片查库：按 ID、用户名、收款地址三路找。找不到库文件就当没有，不报错。"""
+    path, err = await _library_path(None, ctx)
+    if err or path is None or not path.exists():
+        return []
+    lib = scamlist.load(path)
+    hits = []
+    for r in scamlist.find(lib, user_id) + (scamlist.find(lib, username) if username else []):
+        if r["user_id"] == user_id:
+            e = (r.get("evidence") or [{}])[0]
+            hits.append({"why": f"{r['tier']} 档，{len(r.get('evidence', []))} 条证据，{len(r.get('reporters', []))} 个举报人，最早 {r.get('first_reported')}",
+                         "dimension": "骗子库", "chat": e.get("chat"), "date": e.get("date"), "message_id": e.get("message_id"), "quote": e.get("quote"), "words": ["骗子库"]})
+            break
+    for w in wallets:
+        for r in scamlist.find(lib, w):
+            if r["user_id"] != user_id:
+                hits.append({"why": f"跟库里的 @{(r.get('usernames') or [r['user_id']])[0]} 共用收款地址 {_short(w)}（同一个人）", "words": ["骗子库"]})
+    return hits
 
 
 def _domain_age_days(deep: Dict[str, Any]) -> Optional[int]:
@@ -1002,7 +1051,7 @@ def _tier(flags_official: List[str], stats: Dict[str, Any], sites: Dict[str, Any
         hard = True
     if acc:
         flags.append(f"群里被指认 {len(acc)} 次：" + "、".join(sorted({w for a in acc for w in a['words']})))
-        ev += [{"dimension": "负面", **{k: a[k] for k in ("chat", "date", "message_id", "quote")}} for a in acc[:5]]
+        ev += [{"dimension": a.get("dimension", "负面"), **{k: a.get(k) for k in ("chat", "date", "message_id", "quote")}} for a in acc[:5] if a.get("quote")]
         if len(acc) >= 2:
             hard = True
         else:
@@ -1150,7 +1199,14 @@ async def check_seller(
             if low and name_kin(m, low):
                 related.setdefault(m, "名字同源")
 
+        # 查骗子库：库里有他，或者他跟库里的人共用收款地址（同一个人），直接 D
+        hits = await _library_hits(ent.id, username, stats["signals"].get("crypto", []), ctx)
+        if hits:
+            acc = [h for h in hits if h.get("quote")] + acc  # 库里的记录排最前，别被群里的原话挤出证据前五
         tier, flags, ev = _tier(official, stats, sites, acc, opacity, renamed)
+        if hits:
+            flags.insert(0, "骗子库里有记录：" + "；".join(h["why"] for h in hits))
+            tier = "D"
         upstream = [f"转发自 {x}" for x in stats["fwd_from"]] + [f"{h} 用的是 {r['platform']}" for h, r in sites.items() if r.get("platform")]
         upstream += [
             f"收款地址 {_short(a)} 的钱主要转去 {_short(m['top_out'][0]['address'])}（{_usdt(m['top_out'][0]['usdt'])}）"
@@ -1182,3 +1238,79 @@ async def check_seller(
         return dump_json(card)
     except Exception as e:
         return log_and_format_error("check_seller", e, handle=handle)
+
+
+# ---------- 工具三：骗子库 ----------
+
+_EXPORT_NAMES = {"rose_csv": "scamlist-rose.csv", "rose_json": "scamlist-rose.json", "json": "scamlist-export.jsonl"}
+
+
+@mcp.tool(structured_output=False, annotations=ToolAnnotations(title="Scam List", openWorldHint=True, readOnlyHint=False, destructiveHint=False, idempotentHint=True))
+@validate_id("handle")
+async def scam_list(
+    action: str,
+    handle: Optional[ChatRef] = None,
+    note: Optional[str] = None,
+    query: Optional[str] = None,
+    files: Optional[List[str]] = None,
+    fmt: str = "rose_csv",
+    library: Optional[str] = None,
+    ctx: Optional[Context] = None,
+) -> str:
+    """Shared scam list: one JSONL record per account keyed by numeric user id (usernames are aliases), evidence required, lives in the allowed download directory.
+
+    Args:
+        action: add (run check_seller on handle and store it with its evidence + your note) / query / merge / export / stats.
+        handle: For add: the seller's @username or ID.
+        note: For add: your own words (what happened), stored as evidence with you as reporter.
+        query: For query: @username, numeric id, wallet address or domain.
+        files: For merge: other people's list files (inside the allowed directories).
+        fmt: For export: rose_csv / rose_json (Rose federation import) or json (full records).
+        library: Path of the list file; default <allowed dir>/downloads/scamlist.jsonl.
+    """
+    try:
+        path, err = await _library_path(library, ctx)
+        if err:
+            raise ValidationError(err)
+        lib = scamlist.load(path)
+        if action == "add":
+            require(action, handle=handle)
+            card = json.loads(await check_seller(handle=handle, ctx=ctx))
+            me = await client.get_me()
+            reporter = f"@{me.username}" if getattr(me, "username", None) else str(me.id)
+            try:
+                rec = scamlist.record_from_card(card, reporter, note)
+            except ValueError as e:
+                raise ValidationError(str(e))
+            lib = scamlist.merge_records([*lib.values(), rec])
+            scamlist.save(path, lib)
+            return dump_json({"status": "added", "library": str(path), "total": len(lib), "record": scamlist.summary(lib[rec["user_id"]])})
+        if action == "query":
+            require(action, query=query)
+            return dump_json({"library": str(path), "matches": [scamlist.summary(r) for r in scamlist.find(lib, query)]})
+        if action == "merge":
+            require(action, files=files)
+            before, rows = len(lib), list(lib.values())
+            for f in files:
+                p, e = await readable_path(f, ctx)
+                if e:
+                    raise ValidationError(f"{f}: {e}")
+                rows += [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
+            lib = scamlist.merge_records(rows)
+            scamlist.save(path, lib)
+            return dump_json({"status": "merged", "library": str(path), "before": before, "after": len(lib), "dropped_without_evidence": len(rows) - sum(1 for r in rows if r.get("evidence"))})
+        if action == "export":
+            if fmt not in _EXPORT_NAMES:
+                raise ValidationError("fmt must be rose_csv, rose_json or json.")
+            out, e = await writable_path(None, _EXPORT_NAMES[fmt], ctx)
+            if e:
+                raise ValidationError(e)
+            text = scamlist.export(lib, fmt)
+            out.write_text(text, encoding="utf-8")
+            return dump_json({"status": "exported", "file": str(out), "records": text.count("\n") - (1 if fmt == "rose_csv" else 0), "format": fmt})
+        if action == "stats":
+            tiers: Counter = Counter(r.get("tier") for r in lib.values())
+            return dump_json({"library": str(path), "total": len(lib), "by_tier": dict(tiers), "reporters": sorted({x for r in lib.values() for x in r.get("reporters", [])})})
+        raise ValidationError("Unknown action. Use add / query / merge / export / stats.")
+    except Exception as e:
+        return log_and_format_error("scam_list", e, action=action, handle=handle, query=query)

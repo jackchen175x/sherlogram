@@ -2,7 +2,7 @@
 
 English · [中文](README.zh-CN.md)
 
-Let an AI (Claude, or any MCP-capable assistant) work inside your Telegram account: join groups, read messages, search every public post on Telegram, look people up, run groups, send messages, organize folders — **42 tools, 100 features**, one connection shared by every window on your machine.
+Let an AI (Claude, or any MCP-capable assistant) work inside your Telegram account: join groups, read messages, search every public post on Telegram, look people up, run groups, send messages, organize folders — **43 tools, 101 features**, one connection shared by every window on your machine.
 
 What makes it different from other Telegram MCP servers: **it grew out of tracing supply chains back to their source** — one sentence draws the chain, one sentence grades a seller.
 
@@ -80,6 +80,8 @@ Payment addresses found in posts enter the graph automatically: **two sellers co
 
 A storefront domain can be dug into directly: `trace_source(site="…", deep_sites=1)` fetches its homepage for contacts and APIs, then asks three free public sources what sits behind it — **other domains on the same certificate** (one owner, one cert), **other sites on the same server** (looked up by domain on the far side, so a local proxy doesn't matter), and **registrar / registration date / registrant / nameservers**; sibling sites enter the graph with "same cert", "same server" and "same registrant" edges. A certificate older than the current registration gets flagged "domain changed hands, old reputation doesn't count"; `check_seller(deep_sites=True)` raises a red flag when a storefront domain was registered less than a month ago.
 
+Don't keep what you found to yourself: `scam_list` is a **shareable scam list**. `add` runs the seller card on a handle and stores tier, red flags, quoted evidence from the groups, payment addresses and storefronts plus your own one-line note as one record; `query` looks up a handle, numeric id, wallet or domain; `merge` folds in list files other people send you; `export` writes the Rose group-bot federation-ban format so admins can import and ban in one go. The rules copy what works in the wild: **numeric ids only** (usernames are aliases, renaming doesn't help), **no evidence, no entry** (quotes carry chat and date, your own words carry the reporter), merges only add, the worst tier wins. Once a record exists, `check_seller` consults the list automatically: a listed account, or one sharing a payment address with a listed account, goes straight to tier D.
+
 To share it, add `report=True`: the same call also writes an HTML file into your download directory — an **interactive graph you can drag, zoom, filter by type, save as PNG, mask names on, and export as GEXF for Gephi**, followed by the convergence points, sellers, sites and wallets tables; `check_seller` with `report=True` writes a card page with the quoted evidence. Without MCP, save the tool's JSON to a file and run `python -m tg_mcp.report trace.json` for the same page.
 
 
@@ -125,13 +127,13 @@ claude mcp add --transport http -s user telegram http://127.0.0.1:8799/mcp
 
 The directories at the end of the command are the **only places file tools may read from or write to**; omit them and those tools are disabled (see "Safety").
 
-## Tools (42)
+## Tools (43)
 
 One tool per kind of thing, with an `action` parameter choosing what to do — so the tool list is a third the size of the original 98-tool version with nothing missing.
 
 | Area | Tools |
 |---|---|
-| Investigation | `trace_source` (one-shot trace: posts → @handles/domains/payment addresses → probe sites for upstream → re-check on Telegram → graph; `address` follows USDT money flows, `site` digs behind a storefront: same cert / same server / registration; `report=True` writes an interactive graph page) · `check_seller` (one-glance trust card, tier A–D with quoted evidence) |
+| Investigation | `trace_source` (one-shot trace: posts → @handles/domains/payment addresses → probe sites for upstream → re-check on Telegram → graph; `address` follows USDT money flows, `site` digs behind a storefront: same cert / same server / registration; `report=True` writes an interactive graph page) · `check_seller` (one-glance trust card, tier A–D with quoted evidence, consults the scam list) · `scam_list` (shared scam list: add / query / merge / export / stats, Rose federation-ban export) |
 | Me | `get_me` · `update_profile` (name/bio/photo) · `privacy` (get/set) · `set_bot_commands` · `get_sticker_sets` |
 | Chats, channels, people | `list_chats` · `get_chat` (bio, shared groups, online status, photos, scam/fake) · `get_participants` (members/admins/banned) · `list_topics` · `join_chat` (username/link/invite hash) · `leave_chat` · `create_chat` · `edit_chat` · `manage_member` (invite/ban/unban/promote/demote) · `get_invite_link` · `get_recent_actions` · `set_chat_state` (mute/unmute/archive/unarchive) |
 | Messages | `list_messages` (latest/keyword/date range/one sender/around a message) · `get_pinned_messages` · `send_message` (text/reply/file/voice/sticker/GIF) · `send_contact` · `edit_message` · `delete_message` · `forward_message` · `pin_message` · `mark_as_read` · `react` (add/remove/list) · `create_poll` · `press_inline_button` · `download_media` · `save_draft` · `get_drafts` |
