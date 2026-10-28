@@ -62,6 +62,29 @@ def _link(url: str, text: str) -> _Raw:
     return _Raw(f'<a href="{_e(url)}" target="_blank" rel="noopener">{_e(text)}</a>')
 
 
+def _deep_summary(deep: Optional[Dict[str, Any]]) -> str:
+    """网站深挖结果压成一句：注册商 / 注册日期 / 同证书的站 / 同服务器的站。"""
+    if not deep:
+        return ""
+    bits = []
+    if deep.get("registrar"):
+        bits.append("注册商 " + deep["registrar"])
+    if deep.get("registrant"):
+        bits.append("注册人 " + deep["registrant"])
+    if deep.get("created"):
+        bits.append("注册于 " + deep["created"])
+    elif deep.get("first_cert"):
+        bits.append("最早证书 " + deep["first_cert"])
+    if deep.get("cert_siblings"):
+        bits.append("同证书：" + "、".join(deep["cert_siblings"][:5]))
+    if deep.get("same_ip"):
+        bits.append("同服务器：" + "、".join(deep["same_ip"][:5]))
+    for k in ("note", "ip_note", "cert_error", "ip_error", "rdap_error", "error"):
+        if deep.get(k):
+            bits.append(f"{k}: {deep[k]}")
+    return "；".join(bits)
+
+
 def _card(c: Dict[str, Any]) -> str:
     tier = c.get("tier", "?")
     flags = "".join(f"<li>{_e(f)}</li>" for f in c.get("red_flags", [])) or "<li class='muted'>没有红旗</li>"
@@ -121,8 +144,8 @@ def render_html(result: Dict[str, Any], graph: Optional[Dict[str, list]] = None,
         rows = [[s.get("handle"), s.get("name"), s.get("posts"), "、".join(s.get("sites", [])), "、".join(s.get("mentions", []))] for s in result["sellers"]]
         parts.append("<h2>卖家</h2>" + _table(["账号", "名字", "帖数", "贴过的站", "提到的号"], rows))
     if result.get("sites"):
-        rows = [[_link(f"https://{h}", h), s.get("verdict"), s.get("title"), s.get("platform"), "、".join(s.get("contacts", [])), "、".join(s.get("calls", []))] for h, s in result["sites"].items()]
-        parts.append("<h2>网站</h2>" + _table(["域名", "探测结果", "标题", "平台", "站上留的联系方式", "调用的域名"], rows))
+        rows = [[_link(f"https://{h}", h), s.get("verdict"), s.get("title"), s.get("platform"), "、".join(s.get("contacts", [])), "、".join(s.get("calls", [])), _deep_summary(s.get("deep"))] for h, s in result["sites"].items()]
+        parts.append("<h2>网站</h2>" + _table(["域名", "探测结果", "标题", "平台", "站上留的联系方式", "调用的域名", "背后"], rows))
     if result.get("wallets"):
         rows = [
             [_link(w.get("explorer", "#"), a), w.get("in_usdt"), w.get("out_usdt"), w.get("payers"), w.get("payees"), f"{w.get('first') or ''} ～ {w.get('last') or ''}",

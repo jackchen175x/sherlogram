@@ -78,10 +78,12 @@ graph LR
 
 帖子里出现的收款地址也会自动进图谱：**两个卖家用同一个地址收款，就是同一个人**，比任何文字线索都硬；钱最后汇到谁那里，谁就是上游。
 
+给一个卡网域名也能直接开挖：`trace_source(site="…", deep_sites=1)` 抓它首页找联系方式和接口，再去三个免费公开接口查它背后——**同一张证书上还签了哪些别的站**（同一个人买的证书）、**同一台服务器上还有哪些站**（让对方按域名查，本机走代理也不碍事）、**注册商 / 注册日期 / 注册人 / 域名服务器**；兄弟站进图谱连「同证书」「同服务器」「同注册人」三种线。最早证书比本次注册还早的，标「域名换过主人，老口碑不作数」；卖家卡片加 `deep_sites=True`，卡网域名一个月内才注册的直接亮红旗。
+
 要发出去给人看，加一个 `report=True`：同一次调用顺手在你的下载目录里生成一个网页文件，点开就是**能拖、能缩放、按类型筛、一键存图、一键打码、导出 GEXF 给 Gephi** 的互动图谱，下面附汇聚点、卖家、网站、钱包四张表；`check_seller` 加 `report=True` 则出一张带证据原话的卡片页。没接 MCP 的人把工具返回的 JSON 存成文件，`python -m tg_mcp.report trace.json` 也能生成同样的网页。
 
 
-**边界**：追几层、查几个站、核对几个 @号、查几个钱包、最多几秒都是参数，用完了在 `truncated` 里明说停在哪。核对 @号 会触发 Telegram 限速，所以默认只核对 8 个、每个隔 1 秒。抓站只抓首页、拒绝内网地址、不回传网页内容；本机走透明代理（fake-ip）时拿不到真实 IP，判不了「同一台服务器」。链上只查波场 USDT（灰产收款的主流），走波场官方免费接口，不带钥匙能用、查多了会限速，环境变量 `TRONGRID_API_KEY` 可放宽；地址是交易所还是风险地址，免费接口不给标签，结果里带浏览器链接自己看。分档只是相对可核查度，不是购买背书。
+**边界**：追几层、查几个站、核对几个 @号、查几个钱包、最多几秒都是参数，用完了在 `truncated` 里明说停在哪。核对 @号 会触发 Telegram 限速，所以默认只核对 8 个、每个隔 1 秒。抓站只抓首页、拒绝内网地址、不回传网页内容；本机走透明代理（fake-ip）时拿不到真实 IP，判不了「同一台服务器」。网站深挖走 crt.sh、HackerTarget（免费每天 20 次）、rdap.org 三个公开接口，Cloudflare 后面的站查不到同服务器、注册人多半打码，这是接口的天花板不是没查。链上只查波场 USDT（灰产收款的主流），走波场官方免费接口，不带钥匙能用、查多了会限速，环境变量 `TRONGRID_API_KEY` 可放宽；地址是交易所还是风险地址，免费接口不给标签，结果里带浏览器链接自己看。分档只是相对可核查度，不是购买背书。
 
 ## 一套找源头的打法
 
@@ -129,7 +131,7 @@ claude mcp add --transport http -s user telegram http://127.0.0.1:8799/mcp
 
 | 类别 | 工具 |
 |---|---|
-| 调研 | `trace_source`（一键溯源：搜帖 → 抽 @号/网址/收款地址 → 抓站找上游 → 回 Telegram 核对 → 图谱；给 `address` 则追 USDT 资金流向）· `check_seller`（卖家一眼看：分档卡片，带原话证据） |
+| 调研 | `trace_source`（一键溯源：搜帖 → 抽 @号/网址/收款地址 → 抓站找上游 → 回 Telegram 核对 → 图谱；给 `address` 追 USDT 资金流向，给 `site` 挖网站背后：同证书 / 同服务器 / 注册信息；`report=True` 出互动图谱网页）· `check_seller`（卖家一眼看：分档卡片，带原话证据） |
 | 我自己 | `get_me` · `update_profile`（名字/简介/头像）· `privacy`（get/set）· `set_bot_commands` · `get_sticker_sets` |
 | 群 / 频道 / 人 | `list_chats` · `get_chat`（简介、共同群、在线状态、头像、scam/fake）· `get_participants`（成员/管理员/被封）· `list_topics` · `join_chat`（用户名/链接/邀请码）· `leave_chat` · `create_chat` · `edit_chat` · `manage_member`（invite/ban/unban/promote/demote）· `get_invite_link` · `get_recent_actions` · `set_chat_state`（mute/unmute/archive/unarchive） |
 | 消息 | `list_messages`（最新/搜词/按日期/只看某人/某条前后）· `get_pinned_messages` · `send_message`（文字/回复/文件/语音/贴纸/GIF）· `send_contact` · `edit_message` · `delete_message` · `forward_message` · `pin_message` · `mark_as_read` · `react`（add/remove/list）· `create_poll` · `press_inline_button` · `download_media` · `save_draft` · `get_drafts` |

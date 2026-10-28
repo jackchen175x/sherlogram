@@ -206,7 +206,7 @@ async def test_group_members_enter_graph_only_with_clues(fake):
 
 
 async def test_trace_needs_query_or_chat(fake):
-    with pytest.raises(Exception, match="query, chat_id and/or address"):
+    with pytest.raises(Exception, match="query, chat_id, address and/or site"):
         await trace.trace_source()
 
 

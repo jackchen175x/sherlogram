@@ -40,6 +40,7 @@ from .common import (
     validate_id,
     writable_path,
 )
+from .domain_intel import deep_probe, registrable
 from .report import render_html
 from .search import search_public_posts
 
@@ -523,11 +524,42 @@ async def _expand_wallet(graph: _Graph, addr: str, depth: int, branch: int = 3) 
     return new
 
 
+async def _deep_site(graph: _Graph, host: str, depth: int) -> List[Tuple[str, str]]:
+    """查一个站背后：同证书的兄弟站、同服务器的站、注册信息。兄弟站进图，供下一层接着查。"""
+    node = graph.nodes[host]
+    deep = await deep_probe(host)
+    node["deep"] = deep
+    new = []
+    for rel, key in (("同证书", "cert_siblings"), ("同服务器", "same_ip")):
+        for d in deep.get(key) or []:
+            if d not in graph.nodes:
+                new.append((d, "site"))
+            graph.add(d, "site", d, depth + 1)
+            graph.link(host, d, rel)
+    return new
+
+
+def _link_same_registrant(graph: _Graph) -> None:
+    """两个查过注册信息的站，注册人（或没打码的邮箱）一样就连一条线。"""
+    by_who: Dict[str, List[str]] = defaultdict(list)
+    for k, n in graph.nodes.items():
+        deep = n.get("deep") or {}
+        for who in (deep.get("registrant"), deep.get("registrant_email")):
+            if who:
+                by_who[who.casefold()].append(k)
+    for hosts in by_who.values():
+        for a in hosts:
+            for b in hosts:
+                if a < b:
+                    graph.link(a, b, "同注册人")
+
+
 async def _crawl(graph: _Graph, frontier: List[Tuple[str, str]], depth: int, budget: Dict[str, Any]) -> List[str]:
     """一层层往上追。每层先查站（并行）再核对 @号（串行、隔 1 秒）。预算用完或限速就停，并把停在哪说清楚。"""
     notes: List[str] = []
     sites_left, resolve_left, deadline = budget["sites"], budget["resolve"], budget["deadline"]
     wallets_left = budget.get("wallets", 0)
+    deep_left = budget.get("deep", 0)
     sem = asyncio.Semaphore(4)
 
     async def probe(h):
@@ -588,6 +620,13 @@ async def _crawl(graph: _Graph, frontier: List[Tuple[str, str]], depth: int, bud
                     nxt.append((t, "site"))
                 graph.add(t, "site", t, level + 1)
                 graph.link(rec["host"], t, "跳转")
+        # 深挖预算给被指得最多、而且真能打开的站（打不开的多半是死站，查了也白查）
+        for h in [h for h in sites if graph.nodes[h].get("verdict") == "reachable" and "deep" not in graph.nodes[h]][:deep_left]:
+            deep_left -= 1
+            try:
+                nxt += await _deep_site(graph, h, level)
+            except Exception as e:
+                graph.nodes[h]["deep"] = {"error": type(e).__name__}
         for k in handles:
             if time.monotonic() > deadline:
                 notes.append(f"时间到，第 {level} 层的 @号 没核对完")
@@ -613,6 +652,7 @@ async def _crawl(graph: _Graph, frontier: List[Tuple[str, str]], depth: int, bud
             await asyncio.sleep(_PAUSE / 3)
         frontier = nxt
 
+    _link_same_registrant(graph)
     # 两个站在同一台服务器 = 大概率同一个人（Cloudflare 后面的除外，那个 IP 是共享的）
     by_ip: Dict[str, List[str]] = defaultdict(list)
     for k, n in graph.nodes.items():
@@ -632,6 +672,8 @@ _REASON = {
     "简介里写着": "{n} 个账号简介里写着它",
     "收款地址": "{n} 个卖家用它收款（同一个人）", "转出": "{n} 个钱包的钱转到它（资金汇聚）", "转入": "{n} 个地址给它打过钱",
 }
+# 这三种关系没有方向，画图只画一条线；它们说明「是同一伙人」，不说明「是上游」，所以只写进理由不算分
+_SYMMETRIC = {"同服务器": "{n} 个站跟它在同一台服务器", "同证书": "{n} 个站跟它在同一张证书上（同一个人买的证书）", "同注册人": "{n} 个站的注册人跟它一样"}
 
 
 def _candidates(graph: _Graph, sellers: Set[str]) -> List[Dict[str, Any]]:
@@ -641,16 +683,15 @@ def _candidates(graph: _Graph, sellers: Set[str]) -> List[Dict[str, Any]]:
         if k in sellers:
             continue
         refs = graph.referrers(k)
-        same = refs.pop("同服务器", set()) | {d for s, d, rel in graph.edges if s == k and rel == "同服务器"}
+        sym = {rel: refs.pop(rel, set()) | {d for s, d, r2 in graph.edges if s == k and r2 == rel} for rel in _SYMMETRIC}
         members = refs.pop("在群里发帖", set())  # 成员在群里发帖是群的日常，不说明群是源头
-        srcs = set().union(*refs.values()) - {k} if refs else set()
+        srcs = (set().union(*refs.values()) if refs else set()) - {k}  # 「同一伙人」的三种关系只当说明，不算谁是上游
         if len(srcs) < 2:
             continue
         reasons = [_REASON[rel].format(n=len(s)) for rel, s in sorted(refs.items())]
+        reasons += [_SYMMETRIC[rel].format(n=len(s)) + "：" + "、".join(sorted(s)[:4]) for rel, s in sym.items() if s]
         if members:
             reasons.append(f"{len(members)} 个带线索的账号在里面发帖")
-        if same:
-            reasons.append("与 " + "、".join(sorted(same)) + " 在同一台服务器")
         if n.get("platform"):
             reasons.append(f"平台：{n['platform']}")
         if n["kind"] == "wallet" and n.get("tx"):
@@ -742,11 +783,13 @@ async def trace_source(
     query: Optional[str] = None,
     chat_id: Optional[Union[ChatRef, List[ChatRef]]] = None,
     address: Optional[str] = None,
+    site: Optional[str] = None,
     depth: int = 2,
     max_messages: int = 60,
     max_sites: int = 10,
     max_resolve: int = 8,
     max_wallets: int = 6,
+    deep_sites: int = 0,
     time_budget: int = 90,
     report: bool = False,
     ctx: Optional[Context] = None,
@@ -756,15 +799,16 @@ async def trace_source(
     Args:
         query: Keywords (searched in your chats and public channels).
         chat_id: One chat or a list to read instead; with query, search inside them, without, only posts containing links.
-        address: Start from a Tron wallet instead and follow where its USDT goes.
+        address / site: Start from a Tron wallet (follow its USDT) or from a storefront domain instead.
         depth: Hops to follow, 1-3.
         max_messages / max_sites / max_resolve / max_wallets: Budgets for seed posts, sites probed, @handles looked up (rate-limited), wallets queried on-chain.
+        deep_sites: How many sites to dig behind (certificate siblings, same server, registration; 3 free lookups each, same-server one is 20/day).
         time_budget: Seconds before returning what was found so far.
         report: Also write a shareable HTML report (interactive graph + tables) into the allowed download directory.
     """
     try:
-        if not query and chat_id is None and not address:
-            raise ValidationError("Give query, chat_id and/or address.")
+        if not query and chat_id is None and not address and not site:
+            raise ValidationError("Give query, chat_id, address and/or site.")
         depth = max(1, min(int(depth), 3))
         deadline = time.monotonic() + time_budget
         posts, notes = [], []
@@ -775,6 +819,11 @@ async def trace_source(
                 raise ValidationError("address must be a valid Tron (T...) or Ethereum (0x...) address.")
             graph.add(address, "wallet", _short(address), 0, chain=chain)
             frontier.append((address, "wallet"))
+        if site:
+            host = _clean_host(re.sub(r"^https?://", "", site).split("/")[0])
+            graph.add(host, "site", host, 0)
+            frontier.append((host, "site"))
+            deep_sites = max(deep_sites, 1)  # 既然是从站出发，这个站本身肯定要挖
         if chat_id is not None:
             chats = chat_id if isinstance(chat_id, list) else [chat_id]
             per_chat = max(10, max_messages // len(chats))
@@ -795,16 +844,16 @@ async def trace_source(
             posts += pub
             if status:
                 notes.append(f"公开频道搜索没用上：{status}")
-        if not posts and not address:
+        if not posts and not address and not site:
             return dump_json({"summary": "没搜到帖子。换个关键词，或者指定 chat_id。", "posts_read": 0})
 
         for p in posts:
             sellers.add(p["sender"])
             graph.add(p["sender"], "seller", p["sender_label"], 0)
             frontier += graph.absorb(p["sender"], p["text"], 1, (p["fwd"], p["fwd_label"]))
-        notes += await _crawl(graph, frontier, depth, {"sites": max_sites, "resolve": max_resolve, "wallets": max_wallets, "deadline": deadline})
+        notes += await _crawl(graph, frontier, depth, {"sites": max_sites, "resolve": max_resolve, "wallets": max_wallets, "deep": deep_sites, "deadline": deadline})
 
-        cands = _candidates(graph, sellers | ({address} if address else set()))  # 起点钱包不算汇聚点
+        cands = _candidates(graph, sellers | ({address} if address else set()) | ({host} if site else set()))  # 起点不算汇聚点
         seller_rows = sorted(
             (
                 {
@@ -817,7 +866,7 @@ async def trace_source(
             key=lambda r: -r["posts"],
         )[:15]
         sites = {
-            k: {f: n[f] for f in ("verdict", "title", "platform", "ip", "cdn", "note", "contacts", "calls", "redirects_to", "error") if n.get(f)}
+            k: {f: n[f] for f in ("verdict", "title", "platform", "ip", "cdn", "note", "contacts", "calls", "redirects_to", "deep", "error") if n.get(f)}
             for k, n in graph.nodes.items() if n["kind"] == "site" and n.get("checked")
         }
         handles = {
@@ -833,13 +882,13 @@ async def trace_source(
             c = cands[0]
             head += f" 线索汇聚点：{c['node']}（{'；'.join(c['reasons'])}）。"
         else:
-            head += " 没有汇聚点：各家线索互不重叠，加大 max_messages 或换个群再试。"
+            head += " 没有汇聚点：各家线索互不重叠" + ("，加大 max_messages 或换个群再试。" if posts else "。")
         out = {
             "summary": head, "posts_read": len(posts), "sellers": seller_rows, "candidates": cands,
             "sites": sites, "handles": handles, "wallets": wallets, "truncated": notes, "mermaid": _mermaid(graph, cands, sellers),
         }
         if report:
-            title = "溯源：" + (query or (address and _short(address)) or (", ".join(map(str, chat_id)) if isinstance(chat_id, list) else str(chat_id)))
+            title = "溯源：" + (query or (address and _short(address)) or site or (", ".join(map(str, chat_id)) if isinstance(chat_id, list) else str(chat_id)))
             name = f"trace-{datetime.now(timezone.utc).astimezone():%Y%m%d-%H%M}-{_slug(title[3:])}.html"
             out["report"] = await _write_report(name, render_html(out, _graph_payload(graph, cands, sellers), title=title), ctx)
         return dump_json(out)
@@ -928,6 +977,17 @@ async def _accusations(username: str, self_id: int, limit: int = 60) -> Tuple[Li
     return acc, aliases
 
 
+def _domain_age_days(deep: Dict[str, Any]) -> Optional[int]:
+    """域名多少天前出现：优先注册日期，没有就用最早的证书日期。"""
+    born = deep.get("created") or deep.get("first_cert")
+    if not born:
+        return None
+    try:
+        return (datetime.now(timezone.utc) - datetime.strptime(born, "%Y-%m-%d").replace(tzinfo=timezone.utc)).days
+    except ValueError:
+        return None
+
+
 def _tier(flags_official: List[str], stats: Dict[str, Any], sites: Dict[str, Any], acc: List[Dict[str, Any]],
           opacity: List[str], renamed: List[str]) -> Tuple[str, List[str], List[Dict[str, Any]]]:
     """分档规则全部写死、可复算，照抄 market_watch 的报告规则，不自己发明。"""
@@ -965,6 +1025,11 @@ def _tier(flags_official: List[str], stats: Dict[str, Any], sites: Dict[str, Any
     if len(opacity) >= 2:
         flags.append("结构不透明：" + "；".join(opacity))
         soft = True
+    for h, r in sites.items():
+        age = _domain_age_days(r.get("deep") or {})
+        if age is not None and age < 30:
+            flags.append(f"卡网 {h} 的域名 {age} 天前才注册 / 签证书，「老店」说法对不上")
+            soft = True
     if renamed:
         # 群友明说「他从 @a 改成了 @b」才算马甲；卡网上留的客服号是同一摊子的人，只记在 related_accounts
         flags.append("群友说他改过名 / 有小号：" + "、".join(f"@{h}" for h in renamed))
@@ -984,7 +1049,7 @@ def _tier(flags_official: List[str], stats: Dict[str, Any], sites: Dict[str, Any
 @validate_id("handle", "source_chats")
 async def check_seller(
     handle: ChatRef, source_chats: Optional[List[ChatRef]] = None, sample: int = 50, probe_sites: bool = True,
-    report: bool = False, ctx: Optional[Context] = None,
+    deep_sites: bool = False, report: bool = False, ctx: Optional[Context] = None,
 ) -> str:
     """One-glance trust card for a seller: alive, official flags, posting history, provenance (old posts re-edited, stale ads forwarded), spam ratio, storefront phishing check, accusations next to their @handle, renamed/alt accounts and related accounts — then a tier A-D with quoted evidence.
 
@@ -993,6 +1058,7 @@ async def check_seller(
         source_chats: Groups where their ads appear; default = groups you share with them.
         sample: How many of their posts to read.
         probe_sites: Fetch their storefront domains (HTTP) to detect Cloudflare phishing flags.
+        deep_sites: Also dig behind their top storefront (certificate siblings, same server, registration date).
         report: Also write a shareable HTML card into the allowed download directory.
     """
     try:
@@ -1058,6 +1124,12 @@ async def check_seller(
         if probe_sites and stats["domains"]:
             for r in await asyncio.gather(*(probe_site(h) for h in stats["domains"][:5])):
                 sites[r["host"]] = {k: v for k, v in r.items() if k != "host" and v}
+            if deep_sites:
+                for h in stats["domains"][:2]:
+                    try:
+                        sites.setdefault(h, {})["deep"] = await deep_probe(h)
+                    except Exception as e:
+                        sites.setdefault(h, {})["deep"] = {"error": type(e).__name__}
 
         # 钱的情况：他贴过的波场收款地址，链上进出账和钱主要转去了哪
         money: Dict[str, Any] = {}
