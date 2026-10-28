@@ -78,6 +78,9 @@ Then ask "where does the money from this payment address go?" — same `trace_so
 
 Payment addresses found in posts enter the graph automatically: **two sellers collecting on the same address are one person** — harder evidence than any text clue; whoever the money finally pools at is the upstream.
 
+To share it, add `report=True`: the same call also writes an HTML file into your download directory — an **interactive graph you can drag, zoom, filter by type, save as PNG, mask names on, and export as GEXF for Gephi**, followed by the convergence points, sellers, sites and wallets tables; `check_seller` with `report=True` writes a card page with the quoted evidence. Without MCP, save the tool's JSON to a file and run `python -m tg_mcp.report trace.json` for the same page.
+
+
 **Limits**: hops, sites probed, handles re-checked, wallets queried and seconds are all parameters; when a budget runs out, `truncated` says where it stopped. Username lookups are rate-limited by Telegram, so by default only 8 handles are re-checked, one second apart. Sites are probed by fetching the homepage only, private-network hosts are refused, page bodies are never returned. Behind a transparent proxy (fake-ip) the real IP is unknown, so "same server" cannot be judged. On-chain lookups cover USDT on Tron only (where this market collects payment), through Tron's official free API: works without a key, rate-limited when busy, `TRONGRID_API_KEY` raises the limit; the free API gives no address labels (exchange / risk), so each result links to the explorer. Tiers are relative verifiability, not a purchase endorsement.
 
 ## A playbook for finding the source

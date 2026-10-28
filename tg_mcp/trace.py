@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 import httpx
+from mcp.server.fastmcp import Context
 from mcp.types import ToolAnnotations
 from telethon import errors, functions, types, utils
 
@@ -37,7 +38,9 @@ from .common import (
     norm_text,
     resolve_entity,
     validate_id,
+    writable_path,
 )
+from .report import render_html
 from .search import search_public_posts
 
 # ---------- 文本里的线索 ----------
@@ -699,6 +702,37 @@ def _mermaid(graph: _Graph, candidates: List[Dict[str, Any]], sellers: Set[str],
     return "\n".join(lines)
 
 
+def _graph_payload(graph: _Graph, cands: List[Dict[str, Any]], sellers: Set[str]) -> Dict[str, list]:
+    """给报告网页用的节点和边：类型、是否汇聚点、是否有红标、点开去哪。"""
+    top = {c["node"] for c in cands}
+    nodes = []
+    for k, n in graph.nodes.items():
+        kind = "seller" if k in sellers else "site" if n["kind"] == "site" else "wallet" if n["kind"] == "wallet" else "handle"
+        label = k if k.startswith("@") or kind == "site" else n["label"]
+        sub = "" if label == n["label"] or kind == "site" else n["label"][:24]
+        if kind == "wallet":
+            label, sub = _short(k), (f"进 {_usdt(n.get('in_usdt', 0))} · 出 {_usdt(n.get('out_usdt', 0))}" if n.get("tx") else "")
+        elif n.get("platform"):
+            sub = n["platform"]
+        url = f"https://{k}" if kind == "site" else n.get("explorer") if kind == "wallet" else f"https://t.me/{k[1:]}" if k.startswith("@") else None
+        nodes.append({"id": k, "label": label, "sub": sub, "kind": kind, "source": k in top, "bad": bool(n.get("flags")), "url": url})
+    edges = [{"from": a, "to": b, "label": rel + (" " + graph.weights[(a, b)] if (a, b) in graph.weights else "")} for a, b, rel in sorted(graph.edges)]
+    return {"nodes": nodes, "edges": edges}
+
+
+async def _write_report(name: str, html_text: str, ctx: Optional[Context]) -> str:
+    """报告只许写进启动时给的目录（跟发文件、下载同一条安全线）。返回路径或原因。"""
+    path, err = await writable_path(None, name, ctx)
+    if err:
+        return f"没写报告：{err}"
+    path.write_text(html_text, encoding="utf-8")
+    return str(path)
+
+
+def _slug(x: Any) -> str:
+    return re.sub(r"[^\w\u4e00-\u9fff-]+", "-", str(x)).strip("-")[:40] or "report"
+
+
 # ---------- 工具一：一键溯源 ----------
 
 
@@ -714,6 +748,8 @@ async def trace_source(
     max_resolve: int = 8,
     max_wallets: int = 6,
     time_budget: int = 90,
+    report: bool = False,
+    ctx: Optional[Context] = None,
 ) -> str:
     """Trace a supply chain to its source: read posts, pull @handles, storefront domains and payment addresses, probe sites for their upstream, re-check handles on Telegram, follow USDT (Tron) money flows, then rank where the clues converge. Returns JSON plus a Mermaid graph.
 
@@ -724,6 +760,7 @@ async def trace_source(
         depth: Hops to follow, 1-3.
         max_messages / max_sites / max_resolve / max_wallets: Budgets for seed posts, sites probed, @handles looked up (rate-limited), wallets queried on-chain.
         time_budget: Seconds before returning what was found so far.
+        report: Also write a shareable HTML report (interactive graph + tables) into the allowed download directory.
     """
     try:
         if not query and chat_id is None and not address:
@@ -797,10 +834,15 @@ async def trace_source(
             head += f" 线索汇聚点：{c['node']}（{'；'.join(c['reasons'])}）。"
         else:
             head += " 没有汇聚点：各家线索互不重叠，加大 max_messages 或换个群再试。"
-        return dump_json({
+        out = {
             "summary": head, "posts_read": len(posts), "sellers": seller_rows, "candidates": cands,
             "sites": sites, "handles": handles, "wallets": wallets, "truncated": notes, "mermaid": _mermaid(graph, cands, sellers),
-        })
+        }
+        if report:
+            title = "溯源：" + (query or (address and _short(address)) or (", ".join(map(str, chat_id)) if isinstance(chat_id, list) else str(chat_id)))
+            name = f"trace-{datetime.now(timezone.utc).astimezone():%Y%m%d-%H%M}-{_slug(title[3:])}.html"
+            out["report"] = await _write_report(name, render_html(out, _graph_payload(graph, cands, sellers), title=title), ctx)
+        return dump_json(out)
     except Exception as e:
         return log_and_format_error("trace_source", e, query=query, chat_id=chat_id)
 
@@ -941,7 +983,8 @@ def _tier(flags_official: List[str], stats: Dict[str, Any], sites: Dict[str, Any
 @mcp.tool(structured_output=False, annotations=ToolAnnotations(title="Check Seller", openWorldHint=True, readOnlyHint=True))
 @validate_id("handle", "source_chats")
 async def check_seller(
-    handle: ChatRef, source_chats: Optional[List[ChatRef]] = None, sample: int = 50, probe_sites: bool = True
+    handle: ChatRef, source_chats: Optional[List[ChatRef]] = None, sample: int = 50, probe_sites: bool = True,
+    report: bool = False, ctx: Optional[Context] = None,
 ) -> str:
     """One-glance trust card for a seller: alive, official flags, posting history, provenance (old posts re-edited, stale ads forwarded), spam ratio, storefront phishing check, accusations next to their @handle, renamed/alt accounts and related accounts — then a tier A-D with quoted evidence.
 
@@ -950,6 +993,7 @@ async def check_seller(
         source_chats: Groups where their ads appear; default = groups you share with them.
         sample: How many of their posts to read.
         probe_sites: Fetch their storefront domains (HTTP) to detect Cloudflare phishing flags.
+        report: Also write a shareable HTML card into the allowed download directory.
     """
     try:
         today = f"{datetime.now(timezone.utc):%Y-%m-%d}"
@@ -1045,7 +1089,7 @@ async def check_seller(
             flags.append("没找到他的帖子：个人卖家的广告发在群里，传 source_chats 再查" if kind in ("user", "bot") else "读不到帖子")
         else:
             confidence = "high" if ev else "medium"
-        return dump_json({
+        card = {
             "handle": f"@{username}" if username else str(handle), "checked_at": today,
             "tier": tier, "tier_definition": _TIER[tier], "red_flags": flags, "evidence": ev,
             "profile": profile,
@@ -1059,6 +1103,10 @@ async def check_seller(
             "sites": sites, "money": money, "accusations": acc[:10],
             "related_accounts": [{"handle": f"@{h}", "why": why} for h, why in related.items()],
             "upstream_hints": upstream, "confidence": confidence, "disclaimer": _DISCLAIMER,
-        })
+        }
+        if report:
+            name = f"seller-{_slug(card['handle'])}-{datetime.now(timezone.utc).astimezone():%Y%m%d-%H%M}.html"
+            card["report"] = await _write_report(name, render_html({"summary": f"{card['handle']}：{tier} 档 —— {_TIER[tier]}"}, None, [card], title=f"卖家一眼看：{card['handle']}"), ctx)
+        return dump_json(card)
     except Exception as e:
         return log_and_format_error("check_seller", e, handle=handle)
