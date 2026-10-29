@@ -45,7 +45,7 @@ def record_from_card(card: Dict[str, Any], reporter: str, note: Optional[str] = 
         "wallets": list((card.get("clues") or {}).get("signals", {}).get("crypto", [])),
         "domains": list((card.get("clues") or {}).get("domains", [])),
         "related": [r["handle"] for r in card.get("related_accounts") or []],
-        "reporters": [reporter], "first_reported": today(), "last_updated": today(), "source": "tg-mcp",
+        "reporters": [reporter], "first_reported": today(), "last_updated": today(), "source": "sherlogram",
     }
 
 
@@ -118,7 +118,7 @@ def export(lib: Dict[int, Dict[str, Any]], fmt: str = "rose_csv", min_tier: str 
 
     def reason(r):
         flag = (r.get("red_flags") or ["见证据"])[0]
-        return f"{r.get('tier')}档：{flag}（{len(r.get('evidence', []))} 条证据，tg-mcp {r.get('last_updated')}）"[:200]
+        return f"{r.get('tier')}档：{flag}（{len(r.get('evidence', []))} 条证据，Sherlogram {r.get('last_updated')}）"[:200]
 
     if fmt == "rose_json":
         return "".join(

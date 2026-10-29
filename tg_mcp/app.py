@@ -139,7 +139,7 @@ async def _serve() -> None:
                 "Telegram 登录凭证已被服务器作废。\n"
                 "原因：同一串凭证在两个地方同时使用。\n"
                 "怎么修：在终端里跑一次（会给你手机发验证码）\n"
-                "  cd ~/tg-mcp && uv run python relogin.py\n"
+                "  在项目目录里跑：uv run python relogin.py\n"
                 "规矩：这串凭证只给一个程序用，别在别的工具或别的机器上同时配。\n"
                 "========================================\n",
                 file=sys.stderr,

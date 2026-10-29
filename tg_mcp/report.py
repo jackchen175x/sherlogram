@@ -181,7 +181,7 @@ table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(-
 .card{background:#fff;border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin-top:20px}.tier{display:inline-block;min-width:30px;text-align:center;border-radius:6px;padding:0 8px;color:#fff;font-weight:700;margin-right:6px}.tier-A{background:#16a34a}.tier-B{background:#2563eb}.tier-C{background:#d97706}.tier-D{background:#dc2626}
 blockquote{margin:6px 0;padding:8px 12px;background:#fafaf9;border-left:3px solid var(--line);font-size:14px}details{margin-top:10px}summary{cursor:pointer;color:var(--muted)}a{color:#2563eb}
 </style></head><body><main>
-<h1>__TITLE__</h1><p class="date">生成于 __DATE__ · 由 tg-mcp 生成 · 只做相对可核查度分层，不构成任何背书或指控</p>
+<h1>__TITLE__</h1><p class="date">生成于 __DATE__ · 由 Sherlogram 生成 · 只做相对可核查度分层，不构成任何背书或指控</p>
 __BODY__
 </main>
 <script>const DATA = __DATA__;</script>

@@ -3,9 +3,9 @@ requires = ["setuptools>=42", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "tg-mcp"
+name = "sherlogram"
 version = "3.0.0"
-description = "Telegram integration for Claude via the Model Context Protocol"
+description = "Sherlock for Telegram: an MCP server that lets AI work your Telegram account and trace grey-market supply chains to the source"
 readme = "README.md"
 authors = [
     {name = "chigwell"},
@@ -32,15 +32,15 @@ dependencies = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/jackchen175x/tg-mcp"
-"Bug Tracker" = "https://github.com/jackchen175x/tg-mcp/issues"
+"Homepage" = "https://github.com/jackchen175x/sherlogram"
+"Bug Tracker" = "https://github.com/jackchen175x/sherlogram/issues"
 
 [tool.setuptools]
 packages = ["tg_mcp"]
 py-modules = ["main"]
 
 [project.scripts]
-tg-mcp = "main:main"
+sherlogram = "main:main"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

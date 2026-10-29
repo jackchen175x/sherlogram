@@ -1,4 +1,6 @@
-# tg-mcp
+# Sherlogram
+
+**电报福尔摩斯** —— Telegram 版的 [Sherlock](https://github.com/sherlock-project/sherlock)：顺着一条广告，追到卡网、上游和收款地址。
 
 [English](README.md) · 中文
 
@@ -92,7 +94,7 @@ graph LR
 
 骗子的核心手法是换名字：被曝光、弃号、开新号、在同一个群继续卖，只按 @号 追，换个马甲负面记录就归零。`same_person` 按**他甩不掉的东西**追：读几个群的最近帖子，共用收款地址、同一个微信或邮箱、一模一样的整套报价单、群友明说「他从 @a 改成了 @b」——这四样一条就成案；同一个卡网链接、一样的文案、转发同一个源头、被同一条曝光帖点名是弱证据，要两条；名字同源只当助攻。并查集把「A 和 B 一伙、B 和 C 一伙」自动推成一组；超过 8 个人共用的链接当公共平台不算；曝光帖里的地址算到被曝光的人头上，不算到发帖的受害者。给 `handle` 只看这个卖家自己那一组。输出的是证据不是判决，**差一条证据的配对单独列出来**让人看。离线版 `sockpuppet.py` 规则相同，吃扫描快照。
 
-最后一步「进群跟人沟通」也能交给 AI：`probe_seller` 以买家口吻私聊卖家，默认四问——什么价、怎么付、量大多少、一手还是代理——AI 也可以自己写一套更像人的问题。一次调用不傻等：`start` 发第一句就回；之后随时 `check`，有新答复就记下来、抽出线索（品类报价、卡网、付款方式、收款地址、「我是代理 / 我是一手」、提到的上家 @号）并追下一问；`report` 看全程记录和一句话结论，卖家一眼看的卡片也会带上这次套话的结论。**用哪个号你自己定**，工具不拦；但要知道，被限的号仍能回复先发消息的人，所以封号风险集中在给陌生人的**第一句**——默认每天最多开 5 个新对话、两次开场隔 10 分钟、同一个人 7 天内不重复问、每句发前有「正在输入」的停顿，这些都是默认值，环境变量能改，`force=True` 能跳过。想稳，就拿小号的凭证另起一份 tg-mcp。
+最后一步「进群跟人沟通」也能交给 AI：`probe_seller` 以买家口吻私聊卖家，默认四问——什么价、怎么付、量大多少、一手还是代理——AI 也可以自己写一套更像人的问题。一次调用不傻等：`start` 发第一句就回；之后随时 `check`，有新答复就记下来、抽出线索（品类报价、卡网、付款方式、收款地址、「我是代理 / 我是一手」、提到的上家 @号）并追下一问；`report` 看全程记录和一句话结论，卖家一眼看的卡片也会带上这次套话的结论。**用哪个号你自己定**，工具不拦；但要知道，被限的号仍能回复先发消息的人，所以封号风险集中在给陌生人的**第一句**——默认每天最多开 5 个新对话、两次开场隔 10 分钟、同一个人 7 天内不重复问、每句发前有「正在输入」的停顿，这些都是默认值，环境变量能改，`force=True` 能跳过。想稳，就拿小号的凭证另起一份 Sherlogram。
 
 要发出去给人看，加一个 `report=True`：同一次调用顺手在你的下载目录里生成一个网页文件，点开就是**能拖、能缩放、按类型筛、一键存图、一键打码、导出 GEXF 给 Gephi** 的互动图谱，下面附汇聚点、卖家、网站、钱包四张表；`check_seller` 加 `report=True` 则出一张带证据原话的卡片页。没接 MCP 的人把工具返回的 JSON 存成文件，`python -m tg_mcp.report trace.json` 也能生成同样的网页。
 
@@ -120,7 +122,7 @@ graph LR
 ## 快速开始
 
 ```bash
-git clone https://github.com/jackchen175x/tg-mcp && cd tg-mcp
+git clone https://github.com/jackchen175x/sherlogram && cd sherlogram
 uv sync
 cp .env.example .env     # 填 TELEGRAM_API_ID / TELEGRAM_API_HASH（my.telegram.org/apps 申请）
 uv run python relogin.py # 手机收验证码登录，凭证写进 .env
@@ -130,7 +132,7 @@ uv run python relogin.py # 手机收验证码登录，凭证写进 .env
 
 ```bash
 # 方式一：每个窗口各起一份（简单，但多个窗口同时开会互相挤下线，见下文）
-claude mcp add -s user telegram -- uv --directory /path/to/tg-mcp run python main.py ~/Downloads
+claude mcp add -s user telegram -- uv --directory /path/to/sherlogram run python main.py ~/Downloads
 
 # 方式二：全电脑只开一份常驻，各窗口用网址连它（推荐）
 uv run python main.py --http ~/Downloads ~/Desktop &

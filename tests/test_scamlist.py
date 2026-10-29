@@ -52,7 +52,7 @@ def test_export_formats():
     lib = scamlist.merge_records([scamlist.record_from_card(CARD_D, "@jack"), scamlist.record_from_card({**CARD_D, "tier": "C", "profile": {"id": 3, "name": "x"}}, "@jack")])
     csv_text = scamlist.export(lib, "rose_csv")
     assert csv_text.splitlines()[0] == "id,reason,firstname,lastname,username" and csv_text.count("\n") == 2  # 默认只导 D 档
-    assert csv_text.splitlines()[1].startswith("1,D档：群里被指认 2 次：骗子、跑路（1 条证据，tg-mcp ")
+    assert csv_text.splitlines()[1].startswith("1,D档：群里被指认 2 次：骗子、跑路（1 条证据，Sherlogram ")
     rj = scamlist.export(lib, "rose_json", min_tier="C")
     assert rj.count("\n") == 2 and json.loads(rj.splitlines()[0])["user_name"] == "seller_a"
     assert json.loads(scamlist.export(lib, "json").splitlines()[0])["evidence"]

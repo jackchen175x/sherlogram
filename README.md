@@ -1,4 +1,6 @@
-# tg-mcp
+# Sherlogram
+
+**Sherlock for Telegram** — a nod to [Sherlock](https://github.com/sherlock-project/sherlock): follow one ad to the storefront, the upstream and the payment address.
 
 English · [中文](README.zh-CN.md)
 
@@ -92,7 +94,7 @@ Whether a quote is dear, or suspiciously cheap, needs a market to compare with: 
 
 A scammer's core move is renaming: get exposed, drop the account, open a new one, keep selling in the same group — track by @handle and a new puppet starts with a clean record. `same_person` tracks **what they cannot shed**: reading the recent posts of a few groups, a shared payment address, the same WeChat or email, an identical full price list, or a member saying "he renamed from @a to @b" — any one of these four links two accounts; the same storefront link, identical copy, the same forward source or being named together in an exposure post are weak ties and need two; a shared name stem only tops up. Union-find turns "A with B, B with C" into one cluster; a link shared by more than eight accounts is a public platform, not a person; addresses quoted in an exposure post count against the exposed, not the victim who posted. Pass `handle` to see one seller's own cluster. The output is evidence, not a verdict — **pairs one tie short are listed separately** for a human to judge. The offline `sockpuppet.py` applies the same rules to scan snapshots.
 
-The last step, "talk to people in the groups", can go to the AI too: `probe_seller` DMs a seller as a buyer — four default questions: price, payment, bulk price, source or reseller — or the AI writes its own, more natural set. No call blocks: `start` sends the first line and returns; `check` at any time records new replies, mines them for clues (product quotes, storefronts, payment method, wallets, "I'm a reseller / I'm the source", upstream @handles) and asks the next question; `report` shows the transcript and a one-line conclusion, and the seller card picks the probe up as well. **Which account to use is your call** — the tool does not stop you; know that a limited account can still reply to people who messaged it first, so the ban risk sits in the **first message to a stranger**: by default 5 new conversations a day, 10 minutes apart, one probe per person per 7 days, a typing pause before every line. All defaults, all overridable by environment variables or `force=True`. For safety, run a second tg-mcp with a spare account's credentials.
+The last step, "talk to people in the groups", can go to the AI too: `probe_seller` DMs a seller as a buyer — four default questions: price, payment, bulk price, source or reseller — or the AI writes its own, more natural set. No call blocks: `start` sends the first line and returns; `check` at any time records new replies, mines them for clues (product quotes, storefronts, payment method, wallets, "I'm a reseller / I'm the source", upstream @handles) and asks the next question; `report` shows the transcript and a one-line conclusion, and the seller card picks the probe up as well. **Which account to use is your call** — the tool does not stop you; know that a limited account can still reply to people who messaged it first, so the ban risk sits in the **first message to a stranger**: by default 5 new conversations a day, 10 minutes apart, one probe per person per 7 days, a typing pause before every line. All defaults, all overridable by environment variables or `force=True`. For safety, run a second Sherlogram with a spare account's credentials.
 
 To share it, add `report=True`: the same call also writes an HTML file into your download directory — an **interactive graph you can drag, zoom, filter by type, save as PNG, mask names on, and export as GEXF for Gephi**, followed by the convergence points, sellers, sites and wallets tables; `check_seller` with `report=True` writes a card page with the quoted evidence. Without MCP, save the tool's JSON to a file and run `python -m tg_mcp.report trace.json` for the same page.
 
@@ -120,7 +122,7 @@ Two companion scripts make this **reproducible** (ask about the same seller twic
 ## Quick start
 
 ```bash
-git clone https://github.com/jackchen175x/tg-mcp && cd tg-mcp
+git clone https://github.com/jackchen175x/sherlogram && cd sherlogram
 uv sync
 cp .env.example .env     # fill TELEGRAM_API_ID / TELEGRAM_API_HASH from my.telegram.org/apps
 uv run python relogin.py # log in with the code sent to your phone; the session string is written to .env
@@ -130,7 +132,7 @@ Connect to Claude Code (pick one):
 
 ```bash
 # Option 1: one process per window (simple, but several windows at once will kick each other out — see below)
-claude mcp add -s user telegram -- uv --directory /path/to/tg-mcp run python main.py ~/Downloads
+claude mcp add -s user telegram -- uv --directory /path/to/sherlogram run python main.py ~/Downloads
 
 # Option 2: one shared daemon for the whole machine, every window connects by URL (recommended)
 uv run python main.py --http ~/Downloads ~/Desktop &

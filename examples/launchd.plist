@@ -3,17 +3,17 @@
 <plist version="1.0">
 <dict>
   <!-- 全电脑共用的一份 Telegram 连接，各 Claude 窗口连 http://127.0.0.1:8799/mcp -->
-  <key>Label</key><string>com.example.tg-mcp</string>
+  <key>Label</key><string>com.example.sherlogram</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/path/to/tg-mcp/.venv/bin/python</string>
+    <string>/path/to/sherlogram/.venv/bin/python</string>
     <string>main.py</string>
     <string>--http</string>
     <string>/Users/you/Downloads</string>
     <string>/Users/you/Desktop</string>
     <string>/private/tmp</string>
   </array>
-  <key>WorkingDirectory</key><string>/path/to/tg-mcp</string>
+  <key>WorkingDirectory</key><string>/path/to/sherlogram</string>
   <!-- 可选：市场雷达每 24 小时自动跑一轮，有变化就把文本喂给这条命令的标准输入（飞书 / Slack / 任何推送命令）
   <key>EnvironmentVariables</key>
   <dict>
@@ -24,7 +24,7 @@
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>30</integer>
-  <key>StandardOutPath</key><string>/path/to/tg-mcp/daemon.log</string>
-  <key>StandardErrorPath</key><string>/path/to/tg-mcp/daemon.log</string>
+  <key>StandardOutPath</key><string>/path/to/sherlogram/daemon.log</string>
+  <key>StandardErrorPath</key><string>/path/to/sherlogram/daemon.log</string>
 </dict>
 </plist>
