@@ -912,6 +912,7 @@ _TIER = {
     "D": "已消失 / 痕迹被抹除 / 卡网被判钓鱼 / 群里被指认 / 官方标记",
 }
 _NEAR = 25  # 负面词离 @号 多少字以内才算在说他（远处的 @ 多半无关）
+_EPOCH = datetime(2000, 1, 1, tzinfo=timezone.utc)
 
 
 async def _find_seller(handle: ChatRef):
@@ -924,6 +925,23 @@ async def _find_seller(handle: ChatRef):
         found = list(res.users) + list(res.chats)
         return found[0] if found else None
     return await resolve_entity(handle)
+
+
+async def _first_msg(entity, **kw):
+    """最早一条消息。不能用 get_messages(limit=1)：倒序 + limit=1 时 Telethon 发 add_offset=-1，Telegram 对频道返回空
+    （实测 demo_channel 频道如此，列消息工具按日期翻能拿到）；拉一页取第一条就稳。"""
+    async for m in client.iter_messages(entity, reverse=True, **kw):
+        return m
+    return None
+
+
+def _earlier(cur: Optional[Dict[str, Any]], m: Any, chat: str) -> Optional[Dict[str, Any]]:
+    """拿最早一条消息跟手里的比，留更早的。"""
+    if m is None or not getattr(m, "date", None):
+        return cur
+    if cur is None or f"{m.date:%Y-%m-%d}" < cur["date"]:
+        return {"date": f"{m.date:%Y-%m-%d}", "chat": chat, "how": "自己的首帖"}
+    return cur
 
 
 def _post_stats(posts: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -963,7 +981,7 @@ def _post_stats(posts: List[Dict[str, Any]]) -> Dict[str, Any]:
 _ACCUSE_WORDS = ("骗子", "被骗", "跑路", "曝光", "拉黑", "不发货")  # 反查用的几个最硬的负面词
 
 
-async def _accusations(username: str, self_id: int, limit: int = 60) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
+async def _accusations(username: str, self_id: int, limit: int = 60) -> Tuple[List[Dict[str, Any]], Dict[str, str], Optional[Dict[str, Any]]]:
     """搜别人提到他的话：负面词挨着他的 @号 才算指认；顺带抓「他改名成 @xxx」这类马甲句式（返回 {号: 原话}）。
 
     两路搜再合并：按用户名往回翻 5 倍条数（实测最前面几十条要么是他自己带 @号 的广告，要么是担保群机器人
@@ -972,10 +990,18 @@ async def _accusations(username: str, self_id: int, limit: int = 60) -> Tuple[Li
     acc, aliases, seen = [], {}, set()
     low = username.casefold()
     scanned: List[Any] = []
+    first: Optional[Dict[str, Any]] = None  # 翻到的最早一条提到他的（含他自己的广告）：在群里混了多久
+    n = 0
     # 必须带 @ 搜：带 @ 搜到的是别人 @ 他说的话，不带 @ 搜到的是担保单据里光秃秃的名字（实测 60 条 0 条指认）
     async for m in client.iter_messages(None, search=f"@{username}", limit=limit * 5):
+        n += 1
+        if m.date and (first is None or m.date < first["_d"]):
+            first = {"_d": m.date, "date": f"{m.date:%Y-%m-%d}", "chat": _chat_label(m), "by_self": getattr(m, "sender_id", None) == self_id}
         if getattr(m, "sender_id", None) != self_id:  # 自己的广告不算
             scanned.append(m)
+    if first:
+        first.pop("_d")
+        first["complete"] = n < limit * 5  # 翻到底了才是真最早，否则只是最近 limit×5 条里最早的
     for word in _ACCUSE_WORDS:
         try:
             async for m in client.iter_messages(None, search=word, limit=100):
@@ -998,7 +1024,7 @@ async def _accusations(username: str, self_id: int, limit: int = 60) -> Tuple[Li
         words = [w for w in NEGATIVE_WORDS if any(abs(k.start() - p) <= _NEAR for k in re.finditer(w, text) for p in at)]
         if words:
             acc.append({"chat": _chat_label(m), "date": f"{m.date:%Y-%m-%d}", "message_id": m.id, "words": words, "quote": text[:200]})
-    return acc, aliases
+    return acc, aliases, first
 
 
 async def _library_path(library: Optional[str], ctx: Optional[Context]) -> Tuple[Optional[Any], Optional[str]]:
@@ -1151,22 +1177,29 @@ async def check_seller(
                 logger.warning(f"full channel failed for {handle}: {e}")
 
         # 个人卖家的广告在群里，不在「我和他的私聊」里；频道的帖就在频道里
-        posts, sampled_from = [], []
+        posts, sampled_from, own_first = [], [], None  # own_first：他在这些群里的第一条帖（频道就是频道的第一条）—— 在圈子里混了多久
         if kind in ("user", "bot"):
             chats = [await resolve_entity(c) for c in source_chats] if source_chats else common
             for c in chats:
                 try:
                     got = await client.get_messages(c, limit=sample, from_user=ent)
+                    oldest = await _first_msg(c, from_user=ent)
                 except Exception:
                     continue
                 title = getattr(c, "title", None) or str(getattr(c, "id", "?"))
                 sampled_from.append(title)
                 posts += [_post(m, title) for m in got]
+                own_first = _earlier(own_first, oldest, title)
                 if len(posts) >= sample:
                     break
         else:
             posts = [_post(m, label) for m in await client.get_messages(ent, limit=sample)]
             sampled_from = [label]
+            try:
+                # 频道开头几条常被删掉，光 reverse=True（从 1 号往后翻）会翻到空；按日期从 2000 年往后翻才稳（list_messages 同款）
+                own_first = _earlier(None, await _first_msg(ent, offset_date=_EPOCH), label)
+            except Exception as e:
+                logger.warning(f"first post of {handle} failed: {e}")
         stats = _post_stats(posts)
 
         sites: Dict[str, Any] = {}
@@ -1188,7 +1221,12 @@ async def check_seller(
             except Exception as e:
                 money[addr] = {"error": str(e)}
 
-        acc, related = await _accusations(username, ent.id) if username else ([], {})
+        acc, related, mentioned = await _accusations(username, ent.id) if username else ([], {}, None)
+        first_seen = own_first
+        if mentioned and (first_seen is None or mentioned["date"] < first_seen["date"]):
+            first_seen = {"date": mentioned["date"], "chat": mentioned["chat"], "how": "被人提到" + ("" if mentioned["complete"] else "（只翻了最近 300 条）")}
+        if first_seen:
+            profile["first_seen"] = first_seen
         renamed = sorted(related)
         low = (username or "").casefold()
         for host, r in sites.items():

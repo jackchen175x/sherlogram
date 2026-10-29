@@ -49,9 +49,9 @@ class FakeClient:
             return self.by_user.get((entity.id, from_user.id), [])[:limit]
         return self.msgs.get(key, [])[:limit]
 
-    async def iter_messages(self, entity, limit=None, search=None, **kw):
+    async def iter_messages(self, entity, limit=None, search=None, from_user=None, **kw):
         self.last_iter_kw = kw
-        for m in (await self.get_messages(entity, limit=limit, search=search)):
+        for m in (await self.get_messages(entity, limit=limit, search=search, from_user=from_user)):
             yield m
 
     async def __call__(self, request):
