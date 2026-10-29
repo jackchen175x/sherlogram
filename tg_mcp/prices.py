@@ -21,8 +21,8 @@ from .common import ChatRef, ValidationError, dump_json, log_and_format_error, r
 
 CATEGORIES = {
     "GPT Plus": [r"gpt\s*plus", r"plus\s*月卡", r"chatgpt\s*plus", r"(?<![a-z])plus(?![a-z])"],  # 这个市场光说 Plus 就是 ChatGPT Plus
-    "GPT Pro 5x": [r"(?:gpt\s*)?pro\s*5\s*x", r"5\s*倍\s*pro"],
-    "GPT Pro 20x": [r"(?:gpt\s*)?pro\s*20\s*x", r"20\s*倍\s*pro"],
+    "GPT Pro 5x": [r"(?:gpt\s*)?pro\s*5\s*x", r"pro\s*x\s*5\b", r"5\s*倍\s*pro"],
+    "GPT Pro 20x": [r"(?:gpt\s*)?pro\s*20\s*x", r"pro\s*x\s*20\b", r"20\s*倍\s*pro"],
     "GPT Pro": [r"(?:gpt|chatgpt)\s*pro\b(?!\s*\d+\s*x)"],
     "GPT Team": [r"gpt\s*team", r"team\s*(?:席位|母号)"],
     "Claude Pro": [r"claude\s*pro"],
@@ -71,7 +71,8 @@ def extract(text: str) -> List[Dict[str, Any]]:
                 # 报价单一行一个品类：隔着换行的不配（上一行的品类配到下一行的价钱，整条基线就错位）
                 if cm.end() <= pm.start():
                     d, mid = pm.start() - cm.end(), text[cm.end():pm.start()]
-                    if d <= PAIR_WINDOW and d < before[1] and "\n" not in mid:
+                    # 隔着顿号逗号也不配：「Plus、Pro X5 100刀」里的 100 刀不是 Plus 的价
+                    if d <= PAIR_WINDOW and d < before[1] and not re.search(r"[\n，,。；;、|]", mid):
                         before = (cat, d, mid)
                 elif cm.start() >= pm.end():
                     d, mid = cm.start() - pm.end(), text[pm.end():cm.start()]

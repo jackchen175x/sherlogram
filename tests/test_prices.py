@@ -22,6 +22,9 @@ def test_extract_pairs_left_first_and_converts():
     assert prices.extract("ChatGPT Pro 1300元")[0]["category"] == "GPT Pro"  # 没带 5x/20x 的是单独一档
     assert prices.extract("GPT Plus 月卡\n三合一订阅 33R") == [] and prices.extract("Claude Pro\n99元 GPT Plus") == [{"category": "GPT Plus", "cny": 99.0, "raw": "99元"}]  # 隔着换行不配，配后面同一行的
     assert prices.extract("Plus 120元 一个月，Claude 20x 850")[0]["category"] == "GPT Plus" and prices.extract("9元，GPT Plus 现货") == []  # 光说 Plus 算 GPT Plus；隔着逗号不配后面的
+    # 真实广告：「Pro X5」这种写法要认得；X10 / X25 不认识的不硬配给前面的 Plus
+    assert [(it["category"], it["raw"]) for it in prices.extract("ChatGPT 官方代充 / 成品号：\nPlus、Pro X5 100刀、X10 200刀、X25 500刀")] == [("GPT Pro 5x", "100刀")]
+    assert prices.extract("GPT Plus 月卡，99元") == []  # 隔着逗号不配（宁可漏一条，不配错）
     assert prices.extract("一共 200元 包邮") == [] and prices.extract("GPT Plus 现货充足质保三十天售后无忧欢迎联系客服详询另有其他商品 128元") == []
     assert {it["category"] for it in prices.extract("Cursor 299元 Perplexity 99元")} == {"Cursor", "Perplexity"}
     # 品类和价格中间夹着时长 / 席位：另算一类，别拿月价行情判它
