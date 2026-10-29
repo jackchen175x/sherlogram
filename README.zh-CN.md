@@ -2,7 +2,7 @@
 
 [English](README.md) · 中文
 
-让 AI（Claude 或任何支持 MCP 的助手）用你的 Telegram 账号干活：进群、读消息、搜全网公开帖、查人、管群、发消息、整理分组……**47 个工具、105 项功能**，一份连接全电脑共用。
+让 AI（Claude 或任何支持 MCP 的助手）用你的 Telegram 账号干活：进群、读消息、搜全网公开帖、查人、管群、发消息、整理分组……**48 个工具、106 项功能**，一份连接全电脑共用。
 
 它跟别的 Telegram MCP 不一样的地方：**它是为「顺藤摸瓜找源头」长出来的** —— 一句话画出一条供应链，一句话给一个卖家打分。
 
@@ -90,6 +90,8 @@ graph LR
 
 报价贵不贵、低得正常不正常，得有行情才判得出：`price_board` 读市场所在的几个群最近几百条帖，把每个价钱配给它前面的品类（GPT Plus、Claude 20x、GPT Pro 5x……；配对一律取价格**前面**的品类，报价单永远是「品类 价格」，按「最近」配会把 278 配给后面那个 Claude 20x；中间夹着「7 天」「年付」「席位」「合租」的另算一类，别拿月价去判它），按品类给出**中位数、离散度、低价红线**（中位数减三个绝对偏差，夹在五成到八成之间——用中位数不用均值，这个市场长尾，几条离谱高价就能把均值拉飞）、近 7 天涨跌、最便宜的三家、**低于红线的报价**（低到不可能，多半是假货或钓鱼）和**活跃却从不报价的号**（「详情卡网」「私聊」不是数据缺失，是该扣分的地方）。同一家刷 50 遍同一张报价单只算一条，中位数不被刷屏的人定。行情表存成文件后，`check_seller` 的卡片多一栏 `prices_vs_market`：这家每条报价对行情是便宜、贵还是差不多，**低于红线直接亮红旗降到 C 档**。实测五个群 582 条帖 14 秒出表，174 条 GPT Plus 报价中位 99 元。
 
+骗子的核心手法是换名字：被曝光、弃号、开新号、在同一个群继续卖，只按 @号 追，换个马甲负面记录就归零。`same_person` 按**他甩不掉的东西**追：读几个群的最近帖子，共用收款地址、同一个微信或邮箱、一模一样的整套报价单、群友明说「他从 @a 改成了 @b」——这四样一条就成案；同一个卡网链接、一样的文案、转发同一个源头、被同一条曝光帖点名是弱证据，要两条；名字同源只当助攻。并查集把「A 和 B 一伙、B 和 C 一伙」自动推成一组；超过 8 个人共用的链接当公共平台不算；曝光帖里的地址算到被曝光的人头上，不算到发帖的受害者。给 `handle` 只看这个卖家自己那一组。输出的是证据不是判决，**差一条证据的配对单独列出来**让人看。离线版 `sockpuppet.py` 规则相同，吃扫描快照。
+
 要发出去给人看，加一个 `report=True`：同一次调用顺手在你的下载目录里生成一个网页文件，点开就是**能拖、能缩放、按类型筛、一键存图、一键打码、导出 GEXF 给 Gephi** 的互动图谱，下面附汇聚点、卖家、网站、钱包四张表；`check_seller` 加 `report=True` 则出一张带证据原话的卡片页。没接 MCP 的人把工具返回的 JSON 存成文件，`python -m tg_mcp.report trace.json` 也能生成同样的网页。
 
 
@@ -135,13 +137,13 @@ claude mcp add --transport http -s user telegram http://127.0.0.1:8799/mcp
 
 命令末尾的目录是**允许发文件 / 下载文件的目录**，不给就禁用那几个工具（见「安全线」）。
 
-## 工具（47 个）
+## 工具（48 个）
 
 一个工具管一类事，用 `action` 参数选具体动作，所以工具清单只有原版三分之一大，功能一项不少。
 
 | 类别 | 工具 |
 |---|---|
-| 调研 | `trace_source`（一键溯源：搜帖 → 抽 @号/网址/收款地址 → 抓站找上游 → 回 Telegram 核对 → 图谱；给 `address` 追 USDT 资金流向，给 `site` 挖网站背后：同证书 / 同服务器 / 注册信息；`report=True` 出互动图谱网页）· `check_seller`（卖家一眼看：分档卡片，带原话证据，自动查骗子库）· `scam_list`（骗子库：add / query / merge / export / stats，导出 Rose 联盟封禁格式）· `market_radar`（市场雷达：add / run / list / history / remove，盯卖家和溯源线，跟上次快照比，有变化一行一条推出去）· `who_first`（谁最早：一段话术 / 一个卡网 / 一个 @号，最早谁在哪发的、之后谁在抄）· `group_profile`（群画像：干什么的、谁最活跃、广告占比、机器人、疑似同一人、谁被骂）· `price_board`（价格行情：按品类算中位数、低价红线、趋势、最便宜的卖家、低到不可能的报价、从不报价的号；卡片按它判「报价对行情」） |
+| 调研 | `trace_source`（一键溯源：搜帖 → 抽 @号/网址/收款地址 → 抓站找上游 → 回 Telegram 核对 → 图谱；给 `address` 追 USDT 资金流向，给 `site` 挖网站背后：同证书 / 同服务器 / 注册信息；`report=True` 出互动图谱网页）· `check_seller`（卖家一眼看：分档卡片，带原话证据，自动查骗子库）· `scam_list`（骗子库：add / query / merge / export / stats，导出 Rose 联盟封禁格式）· `market_radar`（市场雷达：add / run / list / history / remove，盯卖家和溯源线，跟上次快照比，有变化一行一条推出去）· `who_first`（谁最早：一段话术 / 一个卡网 / 一个 @号，最早谁在哪发的、之后谁在抄）· `group_profile`（群画像：干什么的、谁最活跃、广告占比、机器人、疑似同一人、谁被骂）· `price_board`（价格行情：按品类算中位数、低价红线、趋势、最便宜的卖家、低到不可能的报价、从不报价的号；卡片按它判「报价对行情」）· `same_person`（马甲识别：哪些号是同一个人，一条强证据或两条弱证据成案，差一条的单独列） |
 | 我自己 | `get_me` · `update_profile`（名字/简介/头像）· `privacy`（get/set）· `set_bot_commands` · `get_sticker_sets` |
 | 群 / 频道 / 人 | `list_chats` · `get_chat`（简介、共同群、在线状态、头像、scam/fake）· `get_participants`（成员/管理员/被封）· `list_topics` · `join_chat`（用户名/链接/邀请码）· `leave_chat` · `create_chat` · `edit_chat` · `manage_member`（invite/ban/unban/promote/demote）· `get_invite_link` · `get_recent_actions` · `set_chat_state`（mute/unmute/archive/unarchive） |
 | 消息 | `list_messages`（最新/搜词/按日期/只看某人/某条前后）· `get_pinned_messages` · `send_message`（文字/回复/文件/语音/贴纸/GIF）· `send_contact` · `edit_message` · `delete_message` · `forward_message` · `pin_message` · `mark_as_read` · `react`（add/remove/list）· `create_poll` · `press_inline_button` · `download_media` · `save_draft` · `get_drafts` |
