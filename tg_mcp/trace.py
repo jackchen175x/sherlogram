@@ -42,7 +42,7 @@ from .common import (
     validate_id,
     writable_path,
 )
-from . import scamlist
+from . import prices, scamlist
 from .domain_intel import deep_probe, registrable
 from .report import render_html
 from .search import search_public_posts
@@ -1064,7 +1064,7 @@ def _domain_age_days(deep: Dict[str, Any]) -> Optional[int]:
 
 
 def _tier(flags_official: List[str], stats: Dict[str, Any], sites: Dict[str, Any], acc: List[Dict[str, Any]],
-          opacity: List[str], renamed: List[str]) -> Tuple[str, List[str], List[Dict[str, Any]]]:
+          opacity: List[str], renamed: List[str], cheap: Optional[List[str]] = None) -> Tuple[str, List[str], List[Dict[str, Any]]]:
     """分档规则全部写死、可复算，照抄 market_watch 的报告规则，不自己发明。"""
     flags, ev, hard, soft = [], [], False, False
     for f in ("scam", "fake"):
@@ -1108,6 +1108,10 @@ def _tier(flags_official: List[str], stats: Dict[str, Any], sites: Dict[str, Any
     if renamed:
         # 群友明说「他从 @a 改成了 @b」才算马甲；卡网上留的客服号是同一摊子的人，只记在 related_accounts
         flags.append("群友说他改过名 / 有小号：" + "、".join(f"@{h}" for h in renamed))
+        soft = True
+    if cheap:
+        # 「报价低于群内常见价太多」是识别假货最有效的单一规则（要有同品类行情表才比得出来）
+        flags.append("报价低到不可能：" + "；".join(cheap))
         soft = True
     if hard:
         tier = "D"
@@ -1241,7 +1245,13 @@ async def check_seller(
         hits = await _library_hits(ent.id, username, stats["signals"].get("crypto", []), ctx)
         if hits:
             acc = [h for h in hits if h.get("quote")] + acc  # 库里的记录排最前，别被群里的原话挤出证据前五
-        tier, flags, ev = _tier(official, stats, sites, acc, opacity, renamed)
+        # 报价对行情：有 price_board 存下的行情表才比，没有就跳过
+        quotes = [it for t in (p["text"] for p in posts) for it in prices.extract(t)]
+        board_path, _ = await writable_path(None, prices.BOARD_NAME, ctx)
+        market = prices.load(board_path).get("board", {})
+        vs = prices.compare(quotes, market) if quotes and market else []
+        cheap = [f"{v['item']} {v['raw']}（行情中位 {v['market_median']:g} 元）" for v in vs if v["below_floor"]]
+        tier, flags, ev = _tier(official, stats, sites, acc, opacity, renamed, cheap)
         if hits:
             flags.insert(0, "骗子库里有记录：" + "；".join(h["why"] for h in hits))
             tier = "D"
@@ -1266,7 +1276,7 @@ async def check_seller(
             },
             "provenance": {"edited_old": stats["edited_old"], "forwarded_old": stats["fwd_old"], "via_bot": stats["via_bot"], "forwarded_from": stats["fwd_from"]},
             "clues": {"domains": stats["domains"], "mentions": stats["mentions"], "prices": stats["prices"], "signals": stats["signals"]},
-            "sites": sites, "money": money, "accusations": acc[:10],
+            "sites": sites, "money": money, "prices_vs_market": vs, "accusations": acc[:10],
             "related_accounts": [{"handle": f"@{h}", "why": why} for h, why in related.items()],
             "upstream_hints": upstream, "confidence": confidence, "disclaimer": _DISCLAIMER,
         }

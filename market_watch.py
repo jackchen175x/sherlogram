@@ -187,62 +187,10 @@ async def check_history(row: dict, t: dict) -> None:
 
 
 # 品类词典：直接抄三份报告里已经出现过的枚举，不自己发明分类
-CATEGORIES = {
-    "GPT Plus": [r"gpt\s*plus", r"plus\s*月卡", r"chatgpt\s*plus"],
-    "GPT Pro 5x": [r"(?:gpt\s*)?pro\s*5\s*x", r"5\s*倍\s*pro"],
-    "GPT Pro 20x": [r"(?:gpt\s*)?pro\s*20\s*x", r"20\s*倍\s*pro"],
-    "Claude Pro": [r"claude\s*pro"],
-    "Claude 5x": [r"claude\s*(?:max\s*)?5\s*x"],
-    "Claude 20x": [r"claude\s*(?:max\s*)?20\s*x"],
-    "Gemini Pro": [r"gemini\s*pro"],
-    "Gemini Ultra": [r"gemini\s*ultra"],
-    "Grok": [r"grok"],
-    "Gmail/Pixel": [r"gmail", r"pixel", r"谷歌邮箱"],
-    "API 额度": [r"api\s*(?:额度|key)", r"\d+\s*刀\s*额度"],
-}
-CATEGORY_RES = {k: re.compile("|".join(v), re.I) for k, v in CATEGORIES.items()}
-# 刀/u/usd 折人民币用写死的常量，不联网取汇率 —— 这里要的是可复现，不是精确
-USD_CNY = 7.2
-PRICE_UNIT_RE = re.compile(
-    r"(\d+(?:\.\d+)?)\s*(r\b|rmb|元|块|¥|刀|u\b|usd|美金)", re.I
-)
-PAIR_WINDOW = 20  # 品类词与价格相隔超过这么多字符就不算一对
-
-
-def _to_cny(num: float, unit: str) -> float:
-    return num * USD_CNY if unit.lower() in ("刀", "u", "usd", "美金") else num
-
-
-def extract_priced_items(text: str) -> list:
-    """从一段文案里抽出 (品类, 人民币价) 对。
-
-    配对窗口 20 字符是关键的一刀：4-29 的 top_prices 里混着「价格比 GPT-5.4」
-    「价格是一模一样的，都差不多一辆宝马X5」这种噪音，就是因为把整条消息里
-    任意距离的品类词和数字都配了对。
-    """
-    items = []
-    for pm in PRICE_UNIT_RE.finditer(text):
-        num, unit = float(pm.group(1)), pm.group(2)
-        before, after = (None, 10**9), (None, 10**9)
-        for cat, rx in CATEGORY_RES.items():
-            for cm in rx.finditer(text):
-                if cm.end() <= pm.start():          # 品类在价格之前
-                    d = pm.start() - cm.end()
-                    if d <= PAIR_WINDOW and d < before[1]:
-                        before = (cat, d)
-                elif cm.start() >= pm.end():        # 品类在价格之后
-                    d = cm.start() - pm.end()
-                    if d <= PAIR_WINDOW and d < after[1]:
-                        after = (cat, d)
-        # 一律优先取价格**之前**的品类。报价单的格式永远是「品类 价格」，
-        # 而按"最近"配对会把价格配给下一个品类 —— 实测
-        # 「Claude 5x 278rmb Claude 20x 475rmb」四个配对全错，
-        # 278 被配给了 Claude 20x（它离得更近），整条价格基线会系统性错位。
-        best = before[0] or after[0]
-        if best:
-            items.append({"category": best, "cny": round(_to_cny(num, unit), 2),
-                          "raw": pm.group(0)})
-    return items
+# 品类表、报价抽取、汇率常量都搬到了 tg_mcp/prices.py（price_board 工具和卖家卡片共用），这里只引入
+from tg_mcp.prices import CATEGORIES, CATEGORY_RES, PAIR_WINDOW, PRICE_UNIT_RE, USD_CNY  # noqa: E402,F401
+from tg_mcp.prices import extract as extract_priced_items  # noqa: E402
+from tg_mcp.prices import to_cny as _to_cny  # noqa: E402,F401
 
 
 def price_report(corpus_paths) -> dict:
