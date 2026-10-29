@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sherlogram"
-version = "3.0.0"
+version = "1.0.0"
 description = "Sherlock for Telegram: an MCP server that lets AI work your Telegram account and trace grey-market supply chains to the source"
 readme = "README.md"
 authors = [
