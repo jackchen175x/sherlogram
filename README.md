@@ -2,7 +2,7 @@
 
 English · [中文](README.zh-CN.md)
 
-Let an AI (Claude, or any MCP-capable assistant) work inside your Telegram account: join groups, read messages, search every public post on Telegram, look people up, run groups, send messages, organize folders — **45 tools, 103 features**, one connection shared by every window on your machine.
+Let an AI (Claude, or any MCP-capable assistant) work inside your Telegram account: join groups, read messages, search every public post on Telegram, look people up, run groups, send messages, organize folders — **46 tools, 104 features**, one connection shared by every window on your machine.
 
 What makes it different from other Telegram MCP servers: **it grew out of tracing supply chains back to their source** — one sentence draws the chain, one sentence grades a seller.
 
@@ -86,6 +86,8 @@ Checking once is not enough: `market_radar` is a **market radar**. `add` puts a 
 
 Who is the source in time: `who_first` takes an ad text, a storefront domain, an @handle or a wallet, searches by clues and text fragments (your groups + all public posts), groups the hits by **text fingerprint** (zero-width characters, interpuncts and other search-dodging tricks are stripped before comparing), and sorts each group by time: who posted it first, where and when, then which accounts followed and from which day. **Forwards count by their original date and author**, so the origin channel is named even when it was not searched; the opening lines alone are enough to recognise the same post. Each clue also gets its first-appearance date. The seller card gains a `first_seen` field — their first post in the groups or the earliest mention of them, whichever is older — so a "source" that appeared last week and a shop that has been around for two years are told apart at a glance. Limits: Telegram search is word-based and weak on long Chinese sentences, so long copy is split into short fragments; results come newest first and each term scans `limit` messages, and the result says when it did not reach the end.
 
+Size up a new group first: `group_profile` reads its recent few hundred posts and says in one line **what the group is for** (marketplace / discussion / bot-flooded / one-way channel), how many members, when it started, posts per day, how much the top three posters account for, the **ad share** (a price, a storefront link, or sales talk plus a contact counts as an ad), how many **bots** post how much (official bot flag only, no guessing), which **suspected same-person pairs** there are (shared payment address > same storefront > same name stem > identical copy), how many **accusation posts** and who gets named most, plus the main storefronts, typical prices and payment addresses. The top ten posters come as a table: posts, ads among them, distinct texts, last post, storefronts, @mentions, wallets. Everything is computed from the messages themselves — no per-username lookups, no rate-limit exposure; join/leave notices and media without text are not posts. A 14k-member group profiles in 8 seconds, and the first run caught five western-named accounts posting the same copy at each other.
+
 To share it, add `report=True`: the same call also writes an HTML file into your download directory — an **interactive graph you can drag, zoom, filter by type, save as PNG, mask names on, and export as GEXF for Gephi**, followed by the convergence points, sellers, sites and wallets tables; `check_seller` with `report=True` writes a card page with the quoted evidence. Without MCP, save the tool's JSON to a file and run `python -m tg_mcp.report trace.json` for the same page.
 
 
@@ -131,13 +133,13 @@ claude mcp add --transport http -s user telegram http://127.0.0.1:8799/mcp
 
 The directories at the end of the command are the **only places file tools may read from or write to**; omit them and those tools are disabled (see "Safety").
 
-## Tools (45)
+## Tools (46)
 
 One tool per kind of thing, with an `action` parameter choosing what to do — so the tool list is a third the size of the original 98-tool version with nothing missing.
 
 | Area | Tools |
 |---|---|
-| Investigation | `trace_source` (one-shot trace: posts → @handles/domains/payment addresses → probe sites for upstream → re-check on Telegram → graph; `address` follows USDT money flows, `site` digs behind a storefront: same cert / same server / registration; `report=True` writes an interactive graph page) · `check_seller` (one-glance trust card, tier A–D with quoted evidence, consults the scam list) · `scam_list` (shared scam list: add / query / merge / export / stats, Rose federation-ban export) · `market_radar` (market radar: add / run / list / history / remove — watch sellers and traces, diff against the last snapshot, push one line per change)· `who_first` (who said it first: an ad text / a storefront / an @handle — who posted it first and where, who copied it since) |
+| Investigation | `trace_source` (one-shot trace: posts → @handles/domains/payment addresses → probe sites for upstream → re-check on Telegram → graph; `address` follows USDT money flows, `site` digs behind a storefront: same cert / same server / registration; `report=True` writes an interactive graph page) · `check_seller` (one-glance trust card, tier A–D with quoted evidence, consults the scam list) · `scam_list` (shared scam list: add / query / merge / export / stats, Rose federation-ban export) · `market_radar` (market radar: add / run / list / history / remove — watch sellers and traces, diff against the last snapshot, push one line per change)· `who_first` (who said it first: an ad text / a storefront / an @handle — who posted it first and where, who copied it since)· `group_profile` (group profile: what it is for, top posters, ad share, bots, suspected same-person pairs, who gets accused) |
 | Me | `get_me` · `update_profile` (name/bio/photo) · `privacy` (get/set) · `set_bot_commands` · `get_sticker_sets` |
 | Chats, channels, people | `list_chats` · `get_chat` (bio, shared groups, online status, photos, scam/fake) · `get_participants` (members/admins/banned) · `list_topics` · `join_chat` (username/link/invite hash) · `leave_chat` · `create_chat` · `edit_chat` · `manage_member` (invite/ban/unban/promote/demote) · `get_invite_link` · `get_recent_actions` · `set_chat_state` (mute/unmute/archive/unarchive) |
 | Messages | `list_messages` (latest/keyword/date range/one sender/around a message) · `get_pinned_messages` · `send_message` (text/reply/file/voice/sticker/GIF) · `send_contact` · `edit_message` · `delete_message` · `forward_message` · `pin_message` · `mark_as_read` · `react` (add/remove/list) · `create_poll` · `press_inline_button` · `download_media` · `save_draft` · `get_drafts` |
