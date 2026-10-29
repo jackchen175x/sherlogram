@@ -20,7 +20,7 @@ from .app import client, mcp
 from .common import ChatRef, ValidationError, dump_json, log_and_format_error, resolve_entity, validate_id, writable_path
 
 CATEGORIES = {
-    "GPT Plus": [r"gpt\s*plus", r"plus\s*月卡", r"chatgpt\s*plus"],
+    "GPT Plus": [r"gpt\s*plus", r"plus\s*月卡", r"chatgpt\s*plus", r"(?<![a-z])plus(?![a-z])"],  # 这个市场光说 Plus 就是 ChatGPT Plus
     "GPT Pro 5x": [r"(?:gpt\s*)?pro\s*5\s*x", r"5\s*倍\s*pro"],
     "GPT Pro 20x": [r"(?:gpt\s*)?pro\s*20\s*x", r"20\s*倍\s*pro"],
     "GPT Pro": [r"(?:gpt|chatgpt)\s*pro\b(?!\s*\d+\s*x)"],
@@ -75,7 +75,8 @@ def extract(text: str) -> List[Dict[str, Any]]:
                         before = (cat, d, mid)
                 elif cm.start() >= pm.end():
                     d, mid = cm.start() - pm.end(), text[pm.end():cm.start()]
-                    if d <= PAIR_WINDOW and d < after[1] and "\n" not in mid:
+                    # 价格配后面的品类只是兜底（「低至 9元 GPT Plus」），隔着标点就是下一句了，不配
+                    if d <= PAIR_WINDOW and d < after[1] and not re.search(r"[\n，,。；;、|]", mid):
                         after = (cat, d, mid)
         best, _, between = before if before[0] else after
         if best:

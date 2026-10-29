@@ -1245,6 +1245,13 @@ async def check_seller(
         hits = await _library_hits(ent.id, username, stats["signals"].get("crypto", []), ctx)
         if hits:
             acc = [h for h in hits if h.get("quote")] + acc  # 库里的记录排最前，别被群里的原话挤出证据前五
+        # 套过话的，把那次的结论带上（probe_seller 存的 probes.json）
+        from . import probe as _probe  # probe 引用本模块，只能在函数里引入
+
+        probe_path, _ = await writable_path(None, _probe.STORE_NAME, ctx)
+        probed = _probe.find(_probe.load(probe_path), ent.id)
+        probe_info = {"status": probed["status"], "started": probed["started"], "clues": probed.get("clues", {}), "summary": _probe.summary_of(probed)} if probed else None
+
         # 报价对行情：有 price_board 存下的行情表才比，没有就跳过
         quotes = [it for t in (p["text"] for p in posts) for it in prices.extract(t)]
         board_path, _ = await writable_path(None, prices.BOARD_NAME, ctx)
@@ -1276,7 +1283,7 @@ async def check_seller(
             },
             "provenance": {"edited_old": stats["edited_old"], "forwarded_old": stats["fwd_old"], "via_bot": stats["via_bot"], "forwarded_from": stats["fwd_from"]},
             "clues": {"domains": stats["domains"], "mentions": stats["mentions"], "prices": stats["prices"], "signals": stats["signals"]},
-            "sites": sites, "money": money, "prices_vs_market": vs, "accusations": acc[:10],
+            "sites": sites, "money": money, "prices_vs_market": vs, "probe": probe_info, "accusations": acc[:10],
             "related_accounts": [{"handle": f"@{h}", "why": why} for h, why in related.items()],
             "upstream_hints": upstream, "confidence": confidence, "disclaimer": _DISCLAIMER,
         }
