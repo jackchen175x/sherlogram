@@ -2,7 +2,7 @@
 
 English · [中文](README.zh-CN.md)
 
-Let an AI (Claude, or any MCP-capable assistant) work inside your Telegram account: join groups, read messages, search every public post on Telegram, look people up, run groups, send messages, organize folders — **43 tools, 101 features**, one connection shared by every window on your machine.
+Let an AI (Claude, or any MCP-capable assistant) work inside your Telegram account: join groups, read messages, search every public post on Telegram, look people up, run groups, send messages, organize folders — **44 tools, 102 features**, one connection shared by every window on your machine.
 
 What makes it different from other Telegram MCP servers: **it grew out of tracing supply chains back to their source** — one sentence draws the chain, one sentence grades a seller.
 
@@ -82,6 +82,8 @@ A storefront domain can be dug into directly: `trace_source(site="…", deep_sit
 
 Don't keep what you found to yourself: `scam_list` is a **shareable scam list**. `add` runs the seller card on a handle and stores tier, red flags, quoted evidence from the groups, payment addresses and storefronts plus your own one-line note as one record; `query` looks up a handle, numeric id, wallet or domain; `merge` folds in list files other people send you; `export` writes the Rose group-bot federation-ban format so admins can import and ban in one go. The rules copy what works in the wild: **numeric ids only** (usernames are aliases, renaming doesn't help), **no evidence, no entry** (quotes carry chat and date, your own words carry the reporter), merges only add, the worst tier wins. Once a record exists, `check_seller` consults the list automatically: a listed account, or one sharing a payment address with a listed account, goes straight to tier D.
 
+Checking once is not enough: `market_radar` is a **market radar**. `add` puts a seller (handle) or a trace (keywords / a few groups) on the watch list and takes the first snapshot; `run` re-checks only what is on the list (no site-wide re-crawl: tens of seconds, no rate-limit trouble) and diffs it against the last snapshot — gone, tier changed, renamed, officially flagged, new accusations, storefront or price changes, money re-routed, new sellers on a trace, convergence point moved — one line per change, **pushed only when something changed**. Delivery goes through `RADAR_NOTIFY_CMD` (a shell command that gets the text on stdin: Feishu, Slack, any notifier); with `RADAR_EVERY_HOURS=24` the daemon runs it on its own once a day, timed from the last run recorded in the file so restarts don't reset it. Snapshots are dated and appended, never overwritten; `history` shows any watch's full timeline.
+
 To share it, add `report=True`: the same call also writes an HTML file into your download directory — an **interactive graph you can drag, zoom, filter by type, save as PNG, mask names on, and export as GEXF for Gephi**, followed by the convergence points, sellers, sites and wallets tables; `check_seller` with `report=True` writes a card page with the quoted evidence. Without MCP, save the tool's JSON to a file and run `python -m tg_mcp.report trace.json` for the same page.
 
 
@@ -127,13 +129,13 @@ claude mcp add --transport http -s user telegram http://127.0.0.1:8799/mcp
 
 The directories at the end of the command are the **only places file tools may read from or write to**; omit them and those tools are disabled (see "Safety").
 
-## Tools (43)
+## Tools (44)
 
 One tool per kind of thing, with an `action` parameter choosing what to do — so the tool list is a third the size of the original 98-tool version with nothing missing.
 
 | Area | Tools |
 |---|---|
-| Investigation | `trace_source` (one-shot trace: posts → @handles/domains/payment addresses → probe sites for upstream → re-check on Telegram → graph; `address` follows USDT money flows, `site` digs behind a storefront: same cert / same server / registration; `report=True` writes an interactive graph page) · `check_seller` (one-glance trust card, tier A–D with quoted evidence, consults the scam list) · `scam_list` (shared scam list: add / query / merge / export / stats, Rose federation-ban export) |
+| Investigation | `trace_source` (one-shot trace: posts → @handles/domains/payment addresses → probe sites for upstream → re-check on Telegram → graph; `address` follows USDT money flows, `site` digs behind a storefront: same cert / same server / registration; `report=True` writes an interactive graph page) · `check_seller` (one-glance trust card, tier A–D with quoted evidence, consults the scam list) · `scam_list` (shared scam list: add / query / merge / export / stats, Rose federation-ban export) · `market_radar` (market radar: add / run / list / history / remove — watch sellers and traces, diff against the last snapshot, push one line per change) |
 | Me | `get_me` · `update_profile` (name/bio/photo) · `privacy` (get/set) · `set_bot_commands` · `get_sticker_sets` |
 | Chats, channels, people | `list_chats` · `get_chat` (bio, shared groups, online status, photos, scam/fake) · `get_participants` (members/admins/banned) · `list_topics` · `join_chat` (username/link/invite hash) · `leave_chat` · `create_chat` · `edit_chat` · `manage_member` (invite/ban/unban/promote/demote) · `get_invite_link` · `get_recent_actions` · `set_chat_state` (mute/unmute/archive/unarchive) |
 | Messages | `list_messages` (latest/keyword/date range/one sender/around a message) · `get_pinned_messages` · `send_message` (text/reply/file/voice/sticker/GIF) · `send_contact` · `edit_message` · `delete_message` · `forward_message` · `pin_message` · `mark_as_read` · `react` (add/remove/list) · `create_poll` · `press_inline_button` · `download_media` · `save_draft` · `get_drafts` |

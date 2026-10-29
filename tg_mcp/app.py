@@ -38,6 +38,8 @@ MEMORY_LIMIT_MB = int(os.getenv("TG_MCP_MEMORY_LIMIT_MB", "2048"))
 # 启动阶段总超时（秒）。客户端握手 30s 就放弃了，超过这个数还没起来的进程
 # 留着只会占用同一个 session string，把后来的进程一起卡死在 auth。
 STARTUP_TIMEOUT = int(os.getenv("TG_MCP_STARTUP_TIMEOUT", "45"))
+# 工具模块想在登录完成后挂一个后台任务（比如市场雷达的定时器），往这里 append 一个 async 函数；本模块不认识它们
+STARTUP_TASKS: List = []
 
 mcp = FastMCP("telegram")
 client = TelegramClient(
@@ -110,7 +112,7 @@ async def _startup() -> None:
 
 
 async def _serve() -> None:
-    heartbeat = None
+    heartbeat, extras = None, []
     try:
         try:
             await asyncio.wait_for(_startup(), timeout=STARTUP_TIMEOUT)
@@ -122,6 +124,7 @@ async def _serve() -> None:
             )
             os._exit(1)
         heartbeat = asyncio.create_task(_heartbeat())
+        extras = [asyncio.create_task(t()) for t in STARTUP_TASKS]
         print("Telegram client started. Running MCP server...", file=sys.stderr)
         if HTTP_MODE:
             await mcp.run_streamable_http_async()
@@ -145,8 +148,9 @@ async def _serve() -> None:
             print("Database lock detected. Ensure no other instances are running.", file=sys.stderr)
         sys.exit(1)
     finally:
-        if heartbeat:
-            heartbeat.cancel()
+        for t in [heartbeat, *extras]:
+            if t:
+                t.cancel()
         try:
             await client.disconnect()
         except Exception:

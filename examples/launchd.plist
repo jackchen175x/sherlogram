@@ -14,6 +14,13 @@
     <string>/private/tmp</string>
   </array>
   <key>WorkingDirectory</key><string>/path/to/tg-mcp</string>
+  <!-- 可选：市场雷达每 24 小时自动跑一轮，有变化就把文本喂给这条命令的标准输入（飞书 / Slack / 任何推送命令）
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>RADAR_EVERY_HOURS</key><string>24</string>
+    <key>RADAR_NOTIFY_CMD</key><string>apprise -b "$(cat)" "feishu://TOKEN"</string>
+  </dict>
+  -->
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>30</integer>

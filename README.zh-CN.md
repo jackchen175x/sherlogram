@@ -2,7 +2,7 @@
 
 [English](README.md) · 中文
 
-让 AI（Claude 或任何支持 MCP 的助手）用你的 Telegram 账号干活：进群、读消息、搜全网公开帖、查人、管群、发消息、整理分组……**43 个工具、101 项功能**，一份连接全电脑共用。
+让 AI（Claude 或任何支持 MCP 的助手）用你的 Telegram 账号干活：进群、读消息、搜全网公开帖、查人、管群、发消息、整理分组……**44 个工具、102 项功能**，一份连接全电脑共用。
 
 它跟别的 Telegram MCP 不一样的地方：**它是为「顺藤摸瓜找源头」长出来的** —— 一句话画出一条供应链，一句话给一个卖家打分。
 
@@ -82,6 +82,8 @@ graph LR
 
 查出来的骗子别只留在自己脑子里：`scam_list` 是一份**可共享的骗子库**。`add` 对一个 @号 跑一遍卖家一眼看，把档位、红旗、群里的原话证据、收款地址、卡网连同你自己的一句备注存成一行；`query` 按 @号、数字 ID、收款地址或卡网查；`merge` 把别人发来的名单文件并进来；`export` 导成 Rose 群管机器人能一键导入的联盟封禁格式，群主直接封人。规矩抄自跑得通的社区做法：**只认改不掉的数字 ID**（用户名只当别名，改名也跑不掉）、**没有证据不入库**（原话要带群和日期，自己的话要带举报人）、合并只追加不删、档位取最重。入库之后卖家一眼看会自动查库：库里有他，或者他跟库里的人共用收款地址，直接 D 档。
 
+查过一次不算完：`market_radar` 是**市场雷达**。`add` 把一个卖家（@号）或一条溯源线（关键词 / 几个群）加进盯梢清单，顺手拍第一张快照；`run` 只重查清单上这些对象（不全网重爬，几十秒，不撞限速），跟上一张快照比：跑路了、换档了、改名了、被官方标记了、新多了几条指认、卡网或报价变了、钱改转去哪了、溯源线上冒出新卖家、汇聚点换了——一行一条合成一段，**有变化才推送**。推送走环境变量 `RADAR_NOTIFY_CMD`（一条 shell 命令，文本从标准输入进去：飞书、Slack、任何推送命令都行）；设了 `RADAR_EVERY_HOURS=24`，常驻进程每天自动跑一轮，按文件里记的上次时间算，重启不重置。快照一张张带日期追加、不覆盖，`history` 能翻任何一个对象的全部历史。
+
 要发出去给人看，加一个 `report=True`：同一次调用顺手在你的下载目录里生成一个网页文件，点开就是**能拖、能缩放、按类型筛、一键存图、一键打码、导出 GEXF 给 Gephi** 的互动图谱，下面附汇聚点、卖家、网站、钱包四张表；`check_seller` 加 `report=True` 则出一张带证据原话的卡片页。没接 MCP 的人把工具返回的 JSON 存成文件，`python -m tg_mcp.report trace.json` 也能生成同样的网页。
 
 
@@ -127,13 +129,13 @@ claude mcp add --transport http -s user telegram http://127.0.0.1:8799/mcp
 
 命令末尾的目录是**允许发文件 / 下载文件的目录**，不给就禁用那几个工具（见「安全线」）。
 
-## 工具（43 个）
+## 工具（44 个）
 
 一个工具管一类事，用 `action` 参数选具体动作，所以工具清单只有原版三分之一大，功能一项不少。
 
 | 类别 | 工具 |
 |---|---|
-| 调研 | `trace_source`（一键溯源：搜帖 → 抽 @号/网址/收款地址 → 抓站找上游 → 回 Telegram 核对 → 图谱；给 `address` 追 USDT 资金流向，给 `site` 挖网站背后：同证书 / 同服务器 / 注册信息；`report=True` 出互动图谱网页）· `check_seller`（卖家一眼看：分档卡片，带原话证据，自动查骗子库）· `scam_list`（骗子库：add / query / merge / export / stats，导出 Rose 联盟封禁格式） |
+| 调研 | `trace_source`（一键溯源：搜帖 → 抽 @号/网址/收款地址 → 抓站找上游 → 回 Telegram 核对 → 图谱；给 `address` 追 USDT 资金流向，给 `site` 挖网站背后：同证书 / 同服务器 / 注册信息；`report=True` 出互动图谱网页）· `check_seller`（卖家一眼看：分档卡片，带原话证据，自动查骗子库）· `scam_list`（骗子库：add / query / merge / export / stats，导出 Rose 联盟封禁格式）· `market_radar`（市场雷达：add / run / list / history / remove，盯卖家和溯源线，跟上次快照比，有变化一行一条推出去） |
 | 我自己 | `get_me` · `update_profile`（名字/简介/头像）· `privacy`（get/set）· `set_bot_commands` · `get_sticker_sets` |
 | 群 / 频道 / 人 | `list_chats` · `get_chat`（简介、共同群、在线状态、头像、scam/fake）· `get_participants`（成员/管理员/被封）· `list_topics` · `join_chat`（用户名/链接/邀请码）· `leave_chat` · `create_chat` · `edit_chat` · `manage_member`（invite/ban/unban/promote/demote）· `get_invite_link` · `get_recent_actions` · `set_chat_state`（mute/unmute/archive/unarchive） |
 | 消息 | `list_messages`（最新/搜词/按日期/只看某人/某条前后）· `get_pinned_messages` · `send_message`（文字/回复/文件/语音/贴纸/GIF）· `send_contact` · `edit_message` · `delete_message` · `forward_message` · `pin_message` · `mark_as_read` · `react`（add/remove/list）· `create_poll` · `press_inline_button` · `download_media` · `save_draft` · `get_drafts` |
