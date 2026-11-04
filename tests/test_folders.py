@@ -1,3 +1,4 @@
+import copy
 import json
 import os
 
@@ -29,18 +30,27 @@ def shared(fid, title="Shared", include=()):
 
 
 class FakeClient:
-    """GetDialogFilters 返回预设分组；其余请求只记录。raise_on 可让某个请求抛错。"""
+    """GetDialogFilters 返回预设分组；写入会落进去，好让读回来比对。raise_on 可让某个请求抛错，
+    not_joined 模拟 Telegram 悄悄丢掉没加入的聊天。"""
 
-    def __init__(self, *filters, raise_on=None):
+    def __init__(self, *filters, raise_on=None, not_joined=()):
         self.filters = [types.DialogFilterDefault(), *filters]
         self.calls = []
         self.raise_on = raise_on or {}
+        self.not_joined = set(not_joined)
 
     async def __call__(self, request):
         self.calls.append(request)
         name = type(request).__name__
         if name in self.raise_on:
             raise self.raise_on[name]
+        if name == "UpdateDialogFilterRequest":
+            self.filters = [f for f in self.filters if getattr(f, "id", None) != request.id]
+            if request.filter is not None:
+                kept = copy.copy(request.filter)  # 只改副本，写入请求本身留给断言看
+                kept.include_peers = [p for p in kept.include_peers if p.user_id not in self.not_joined]
+                kept.pinned_peers = [p for p in kept.pinned_peers if p.user_id not in self.not_joined]
+                self.filters.append(kept)
         return SimpleNamespace(filters=self.filters) if name == "GetDialogFiltersRequest" else None
 
     def writes(self):
@@ -105,6 +115,12 @@ async def test_create_folder_takes_lowest_free_id(monkeypatch):
     assert [p.user_id for p in req.filter.include_peers] == [7, 8] and req.filter.pinned_peers == []
 
 
+async def test_create_folder_reports_chats_telegram_dropped(monkeypatch):
+    use(monkeypatch, FakeClient(not_joined=[8]))
+    out = json.loads(await folders.manage_folder(action="create", title="New", chat_ids=[7, 8]))
+    assert out["chats"] == 1 and out["not_added"] == [8] and "join_chat" in out["hint"]
+
+
 async def test_create_folder_pinned(monkeypatch):
     fake = FakeClient()
     use(monkeypatch, fake)
@@ -163,6 +179,12 @@ async def test_add_chat_keeps_other_fields(monkeypatch):
     # 没改的设置必须原样带过去，否则整体覆盖时会被清掉
     assert [p.user_id for p in new.exclude_peers] == [9] and new.groups is True and new.exclude_archived is True
     assert new.emoticon == "B"
+
+
+async def test_add_chat_reports_chats_telegram_dropped(monkeypatch):
+    use(monkeypatch, FakeClient(folder(2, include=[peer(1)]), not_joined=[5]))
+    out = await folders.manage_folder(action="add_chat", folder_id=2, chat_ids=[6, 5])
+    assert "1 chat(s) added" in out and "not added: [5]" in out and "join_chat" in out
 
 
 async def test_add_chat_is_idempotent(monkeypatch):

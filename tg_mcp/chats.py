@@ -497,6 +497,7 @@ _JOIN_ERRORS = {
     "UsersTooMuchError": "The chat is full.",
     "ChannelsTooMuchError": "You have joined too many chats.",
     "ChannelPrivateError": "This chat is private; an invite link is required.",
+    "ValueError": "Cannot find that chat: check the @username, ID or invite link.",
 }
 
 
@@ -535,9 +536,10 @@ async def join_chat(target: ChatRef) -> str:
             invite_hash = value[1:]
         elif isinstance(value, str) and not value.startswith("@"):
             # 裸字符串分不清是邀请码还是用户名：先当邀请码查一次（便宜、不触发用户名限速），不是再当用户名
+            # 用户名被当邀请码查时，服务器既可能回「无效」也可能回「过期」，两种都要接着当用户名试
             try:
                 return await _join_by_hash(value)
-            except errors.InviteHashInvalidError:
+            except (errors.InviteHashInvalidError, errors.InviteHashExpiredError):
                 pass
         if invite_hash:
             return await _join_by_hash(invite_hash)

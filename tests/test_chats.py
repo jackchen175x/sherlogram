@@ -286,6 +286,21 @@ async def test_join_chat_bare_username_falls_back(fake):
     assert "Joined Shop" in await chats.join_chat("https://t.me/shop_name/123")
 
 
+async def test_join_chat_bare_username_answered_as_expired(fake):
+    # 真号实测：@ 不写时，服务器把用户名当邀请码查，回的是「过期」，不能原样报给用户
+    fake.responses = {"CheckChatInviteRequest": errors.InviteHashExpiredError(request=None)}
+    assert "Joined Shop" in await chats.join_chat("shop_name")
+
+
+async def test_join_chat_unknown_name_says_so(fake, monkeypatch):
+    async def not_found(_):
+        raise ValueError("No user has that username")
+    monkeypatch.setattr(chats, "resolve_entity", not_found)
+    fake.responses = {"CheckChatInviteRequest": errors.InviteHashExpiredError(request=None)}
+    with pytest.raises(RuntimeError, match="Cannot find that chat"):
+        await chats.join_chat("no_such_name")
+
+
 async def test_join_chat_already_and_expired(fake):
     fake.responses = {"CheckChatInviteRequest": types.ChatInviteAlready(chat=SimpleNamespace(id=61, title="Old"))}
     assert "Already a member of Old" in await chats.join_chat("t.me/+zzz")

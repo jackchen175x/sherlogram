@@ -109,6 +109,16 @@ async def _save(folder_id: int, new_filter) -> None:
         raise
 
 
+async def _dropped(folder_id: int, peers: list) -> list:
+    """Telegram 会悄悄丢掉你没加入的聊天，写入也不报错，所以存完读回来比对，返回没进去的编号。"""
+    saved = _find(await _get_folders(), folder_id)
+    have = {utils.get_peer_id(p) for p in saved.include_peers + saved.pinned_peers}
+    return [pid for pid in map(utils.get_peer_id, peers) if pid not in have]
+
+
+_DROPPED_HINT = "Telegram drops chats you have not joined; join_chat them first, then add_chat."
+
+
 @mcp.tool(structured_output=False, annotations=ToolAnnotations(title="List Folders", openWorldHint=True, readOnlyHint=True))
 async def list_folders(folder_id: Optional[int] = None) -> str:
     """List chat folders; with folder_id, show that folder in detail including every chat in it.
@@ -175,7 +185,11 @@ async def manage_folder(
                 contacts=contacts, non_contacts=non_contacts, groups=groups, broadcasts=broadcasts, bots=bots,
                 exclude_muted=exclude_muted, exclude_read=exclude_read, exclude_archived=exclude_archived,
             ))
-            return dump_json({"folder_id": new_id, "title": title, "chats": len(peers)})
+            dropped = await _dropped(new_id, peers)
+            out = {"folder_id": new_id, "title": title, "chats": len(peers) - len(dropped)}
+            if dropped:
+                out.update(not_added=dropped, hint=_DROPPED_HINT)
+            return dump_json(out)
 
         if action == "delete":
             require(action, folder_id=folder_id)
@@ -215,6 +229,10 @@ async def manage_folder(
             if unchanged:  # 幂等：没有任何变化就不发请求
                 return f"Nothing to do: folder {folder_id} already {'has' if action == 'add_chat' else 'lacks'} those chats."
             await _save(folder_id, _rebuilt(f, include, pins))
+            if action == "add_chat":
+                dropped = await _dropped(folder_id, peers)
+                if dropped:
+                    return f"{len(peers) - len(dropped)} chat(s) added to folder {folder_id}; not added: {dropped}. {_DROPPED_HINT}"
             return f"{len(peers)} chat(s) {verb} folder {folder_id}" + (" (pinned)." if pinned and action == "add_chat" else ".")
 
         if action == "reorder":
