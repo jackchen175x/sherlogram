@@ -213,6 +213,17 @@ async def test_edit_chat_validation(fake, tmp_path, monkeypatch):
         await chats.edit_chat(30, title="x")
 
 
+async def test_edit_chat_username(fake):
+    assert "username set to @shop_chat" in await chats.edit_chat(10, username="@shop_chat")
+    assert fake.sent("UpdateUsernameRequest")[0].username == "shop_chat"
+    assert "username removed" in await chats.edit_chat(10, username="")
+    with pytest.raises(RuntimeError, match="basic group"):
+        await chats.edit_chat(20, username="x_chat")
+    fake.responses = {"UpdateUsernameRequest": errors.UsernameOccupiedError(request=None)}
+    with pytest.raises(RuntimeError, match="already taken"):
+        await chats.edit_chat(10, username="taken")
+
+
 # ---------- manage_member ----------
 
 

@@ -400,19 +400,21 @@ async def edit_chat(
     title: Optional[str] = None,
     photo_path: Optional[str] = None,
     delete_photo: bool = False,
+    username: Optional[str] = None,
     ctx: Optional[Context] = None,
 ) -> str:
-    """Change a group/channel's title and/or photo, or delete its photo.
+    """Change a group/channel's title, photo or public @username, or delete its photo.
 
     Args:
         chat_id: Group/channel ID or @username.
         title: New title.
         photo_path: Local image (jpg/png/webp) for the new photo.
         delete_photo: Remove the current photo.
+        username: Public @username for a supergroup/channel; "" makes it private again.
     """
     try:
-        if not (title or photo_path or delete_photo):
-            raise ValidationError("Give at least one of: title, photo_path, delete_photo.")
+        if not (title or photo_path or delete_photo or username is not None):
+            raise ValidationError("Give at least one of: title, photo_path, delete_photo, username.")
         if photo_path:
             path, err = await readable_path(photo_path, ctx, kind="photo")
             if err:  # 路径白名单不许绕；用 ValidationError 抛，拒绝原因才能原样到调用方
@@ -422,6 +424,15 @@ async def edit_chat(
             raise ValidationError(f"{chat_id} is a {get_entity_type(entity)}; only groups/channels can be edited.")
         basic = isinstance(entity, Chat)
         done = []
+        if username is not None:
+            if basic:
+                raise ValidationError("A basic group has no public @username; only supergroups and channels do.")
+            name = username.lstrip("@")
+            try:
+                await client(functions.channels.UpdateUsernameRequest(channel=entity, username=name))
+            except errors.RPCError as e:  # 被占、不合法、公开地址名额满了：原因要原样告诉调用方
+                raise ValidationError(f"Cannot set @{name}: {e}")
+            done.append(f"username set to @{name}" if name else "username removed")
         if title:
             await client(functions.messages.EditChatTitleRequest(chat_id=entity.id, title=title) if basic
                          else functions.channels.EditTitleRequest(channel=entity, title=title))

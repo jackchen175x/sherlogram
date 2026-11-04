@@ -2,7 +2,7 @@
 
 **电报福尔摩斯** —— Telegram 版的 [Sherlock](https://github.com/sherlock-project/sherlock)：顺着一条广告，追到卡网、上游和收款地址。
 
-[English](README.md) · 中文
+[English](README.md) · 中文 · [交流群](https://t.me/sherlogram_chat)
 
 让 AI（Claude 或任何支持 MCP 的助手）用你的 Telegram 账号干活：进群、读消息、搜全网公开帖、查人、管群、发消息、整理分组……**49 个工具、107 项功能**，一份连接全电脑共用。
 

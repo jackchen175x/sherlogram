@@ -2,7 +2,7 @@
 
 **Sherlock for Telegram** — a nod to [Sherlock](https://github.com/sherlock-project/sherlock): follow one ad to the storefront, the upstream and the payment address.
 
-English · [中文](README.zh-CN.md)
+English · [中文](README.zh-CN.md) · [Telegram group](https://t.me/sherlogram_chat)
 
 Let an AI (Claude, or any MCP-capable assistant) work inside your Telegram account: join groups, read messages, search every public post on Telegram, look people up, run groups, send messages, organize folders — **49 tools, 107 features**, one connection shared by every window on your machine.
 
