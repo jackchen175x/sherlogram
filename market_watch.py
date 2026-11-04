@@ -814,9 +814,8 @@ def main() -> None:
     ap.add_argument("--diff", nargs=2, type=Path, metavar=("旧", "新"), help="比对两份快照")
     ap.add_argument(
         "--source-chats",
-        default="demo_group,demo_forum_channel,demo_ai_channel,demo_channel",
-        help="逗号分隔的语料群：个人卖家的广告发在这里，不在与他的私聊里。"
-        "默认取 4-29 扫描中线索量最大的几个，保证与那份基线可比。",
+        default="",
+        help="逗号分隔的语料群：个人卖家的广告发在这里，不在与他的私聊里。",
     )
     ap.add_argument("--scan-corpus", action="store_true", help="搜负面词反查被指认的 handle")
     ap.add_argument("--per-word", type=int, default=40, help="每个词每群最多取多少条（默认 40）")
@@ -829,6 +828,8 @@ def main() -> None:
     args = ap.parse_args()
 
     sources_ = [c.strip() for c in args.source_chats.split(",") if c.strip()]
+    if (args.scan_corpus or args.dump_urls) and not sources_:
+        ap.error("--scan-corpus / --dump-urls 需要 --source-chats")
     if args.report:
         rep = build_report(args.snapshot, args.negative_in, args.clusters_in,
                            args.frequency_in, args.prices_in)
